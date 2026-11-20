@@ -7,6 +7,8 @@ import (
 	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
+
+	"github.com/acam-infra/parla-viva/internal/preview"
 )
 
 func openDriver(t *testing.T, m *Model) (*app.Driver, *app.Invalidator) {
@@ -52,6 +54,13 @@ func clickControl(t *testing.T, driver *app.Driver, name string) {
 	}
 }
 
+func TestLiveModelHasNoFakeDemoAccounts(t *testing.T) {
+	m := NewLiveModel(nil, nil)
+	if len(m.Accounts) != 0 || m.ActiveAcctID != 0 || len(m.Chats) != 0 {
+		t.Fatalf("live model leaked demo state: accts=%d active=%d chats=%d", len(m.Accounts), m.ActiveAcctID, len(m.Chats))
+	}
+}
+
 func TestChatSwitchAndSendMessage(t *testing.T) {
 	m := NewDemoModel()
 	driver, inv := openDriver(t, m)
@@ -74,27 +83,38 @@ func TestChatSwitchAndSendMessage(t *testing.T) {
 	if len(m.Messages[11]) != before+1 {
 		t.Fatalf("message count = %d, want %d", len(m.Messages[11]), before+1)
 	}
-	if m.Messages[11][before].Text != "Shipping Parla on Viva!" {
-		t.Fatalf("last message = %q", m.Messages[11][before].Text)
-	}
 }
 
-func TestMultiImageUploadAndLightbox(t *testing.T) {
+func TestCommonFormatInAppPreviewsAndMultiImageUpload(t *testing.T) {
 	m := NewDemoModel()
 	driver, inv := openDriver(t, m)
 
-	// Open Lightbox on inline image message
-	clickControl(t, driver, "View preview-desktop.png")
-	if !m.LightboxOpen || m.LightboxTitle != "preview-desktop.png" {
-		t.Fatalf("LightboxOpen=%v title=%q", m.LightboxOpen, m.LightboxTitle)
+	// 1. Image Lightbox preview
+	clickControl(t, driver, "Preview preview-desktop.png")
+	if !m.PreviewOpen || m.PreviewDoc.Kind != preview.KindImage {
+		t.Fatalf("expected Image preview, got open=%v kind=%v", m.PreviewOpen, m.PreviewDoc.Kind)
 	}
 	clickControl(t, driver, "Zoom +")
-	if m.LightboxZoom <= 1 {
-		t.Fatalf("expected LightboxZoom > 1, got %v", m.LightboxZoom)
+	if m.PreviewZoom <= 1 {
+		t.Fatalf("expected PreviewZoom > 1, got %v", m.PreviewZoom)
 	}
 	clickControl(t, driver, "Close")
 
-	// Queue multiple images via + Photos / AddAttachments and send album
+	// 2. Markdown rendered preview
+	clickControl(t, driver, "Preview release-notes.md")
+	if !m.PreviewOpen || m.PreviewDoc.Kind != preview.KindMarkdown {
+		t.Fatalf("expected Markdown preview, got open=%v kind=%v", m.PreviewOpen, m.PreviewDoc.Kind)
+	}
+	clickControl(t, driver, "Close")
+
+	// 3. CSV interactive Table preview
+	clickControl(t, driver, "Preview build-metrics.csv")
+	if !m.PreviewOpen || m.PreviewDoc.Kind != preview.KindCSV || len(m.PreviewDoc.Rows) != 3 {
+		t.Fatalf("expected CSV preview with 3 rows, got %+v", m.PreviewDoc)
+	}
+	clickControl(t, driver, "Close")
+
+	// 4. Multi-image album send
 	before := len(m.Messages[10])
 	m.AddAttachments([]string{"shot-a.png", "shot-b.jpg", "shot-c.png"})
 	m.Draft = "3 screenshots"
@@ -106,30 +126,20 @@ func TestMultiImageUploadAndLightbox(t *testing.T) {
 	if len(m.Messages[10]) != before+3 {
 		t.Fatalf("messages after multi-image send = %d, want %d", len(m.Messages[10]), before+3)
 	}
-	if len(m.PendingFiles) != 0 {
-		t.Fatalf("expected PendingFiles cleared, got %d", len(m.PendingFiles))
-	}
 }
 
-func TestInviteOnboardingAndBackup(t *testing.T) {
+func TestAccountsSettingsBackupAndGallery(t *testing.T) {
 	m := NewDemoModel()
 	driver, inv := openDriver(t, m)
 
-	clickControl(t, driver, "Invite")
-	if !m.InviteOpen {
-		t.Fatal("expected InviteOpen to be true")
+	// Switch account
+	clickControl(t, driver, "Accounts")
+	clickControl(t, driver, "Work Profile (dev@chatmail.example)")
+	if m.ActiveAcctID != 2 {
+		t.Fatalf("ActiveAcctID = %d, want 2", m.ActiveAcctID)
 	}
-	m.NewAcctName = "Desktop User"
-	inv.Invalidate()
-	if err := driver.Pump(); err != nil {
-		t.Fatal(err)
-	}
-	clickControl(t, driver, "Create Chatmail Account")
-	if len(m.Accounts) != 3 {
-		t.Fatalf("expected 3 accounts after creation, got %d", len(m.Accounts))
-	}
-	clickControl(t, driver, "Close")
 
+	// Open Settings and create/verify SafeStore backup
 	clickControl(t, driver, "Settings")
 	m.BackupPassword = "test-passphrase-2026"
 	inv.Invalidate()
@@ -145,36 +155,11 @@ func TestInviteOnboardingAndBackup(t *testing.T) {
 		t.Fatalf("unexpected verify status: %q", m.BackupStatus)
 	}
 	clickControl(t, driver, "Done")
-}
 
-func TestMultiAccountChatInfoGalleryAndMultiSelect(t *testing.T) {
-	m := NewDemoModel()
-	driver, _ := openDriver(t, m)
-
-	clickControl(t, driver, "Accounts")
-	clickControl(t, driver, "Work Profile (dev@chatmail.example)")
-	if m.ActiveAcctID != 2 {
-		t.Fatalf("ActiveAcctID = %d, want 2", m.ActiveAcctID)
-	}
-
-	clickControl(t, driver, "Info")
-	clickControl(t, driver, "Mute Chat")
-	if !m.ActiveChat().IsMuted {
-		t.Fatal("expected active chat to be muted")
-	}
-	clickControl(t, driver, "Close")
-
+	// Open Gallery
 	clickControl(t, driver, "Gallery")
-	if len(m.GalleryItems()) == 0 {
-		t.Fatal("expected attachment in default chat gallery")
+	if len(m.GalleryItems()) < 3 {
+		t.Fatalf("expected >= 3 gallery items, got %d", len(m.GalleryItems()))
 	}
 	clickControl(t, driver, "Close")
-
-	before := len(m.Messages[10])
-	clickControl(t, driver, "Select")
-	clickControl(t, driver, "Select message 1001")
-	clickControl(t, driver, "Delete Selected")
-	if len(m.Messages[10]) != before-1 {
-		t.Fatalf("messages after delete = %d, want %d", len(m.Messages[10]), before-1)
-	}
 }

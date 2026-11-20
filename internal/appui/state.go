@@ -11,9 +11,11 @@ import (
 	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
+	uimarkdown "github.com/vivaui/viva/ui/markdown"
 
 	"github.com/acam-infra/parla-viva/internal/dc"
 	"github.com/acam-infra/parla-viva/internal/history"
+	"github.com/acam-infra/parla-viva/internal/preview"
 )
 
 // LayoutMode selects one of Parla's three conversation layouts.
@@ -27,7 +29,7 @@ const (
 
 var LayoutModes = []LayoutMode{LayoutBubble, LayoutCompact, LayoutWorkspace}
 
-var ChatFilters = []string{"All", "Unread", "Pinned", "Groups"}
+var ChatFilters = []string{"All", "Unread", "Pinned"}
 
 var GalleryTabs = []string{"All", "Images", "Files", "Webxdc"}
 
@@ -54,14 +56,17 @@ type Model struct {
 	Windows      map[int]history.Window
 	NextLocalID  int
 
-	// Image bitmap cache & Lightbox viewer
-	ImageCache     map[string]gfx.Bitmap
-	LightboxOpen   bool
-	LightboxTitle  string
-	LightboxBitmap gfx.Bitmap
-	LightboxZoom   float32
+	// Image bitmap cache & Universal File Previewer state
+	ImageCache    map[string]gfx.Bitmap
+	PreviewOpen   bool
+	PreviewDoc    preview.Document
+	PreviewBitmap gfx.Bitmap
+	PreviewZoom   float32
+	PreviewMD     uimarkdown.State
+	PreviewTable  ui.TableState
+	PreviewRows   ui.TableRows
 
-	// Navigation & search
+	// Navigation, header menus & search
 	SidebarFilter string
 	SidebarQuery  string
 	SearchOpen    bool
@@ -69,6 +74,8 @@ type Model struct {
 	SearchMatch   int
 	QuickOpen     bool
 	QuickQuery    string
+	NewMenuOpen   bool
+	MoreMenuOpen  bool
 
 	// Composer, multi-image album queue & drag-and-drop
 	Draft        string
@@ -121,15 +128,8 @@ type Model struct {
 	pendingUpdates []func(*Model)
 }
 
-// NewDemoModel constructs an interactive offline preview populated with realistic
-// encrypted Delta Chat conversations and sample inline images.
-func NewDemoModel() *Model {
-	now := time.Now().Unix()
-	m := &Model{
-		DemoMode:      true,
-		StatusText:    "Demo mode (deltachat-rpc-server not connected)",
-		ActiveAcctID:  1,
-		ActiveChatID:  10,
+func newBaseModel() *Model {
+	return &Model{
 		SidebarFilter: "All",
 		GalleryTab:    "All",
 		Layout:        LayoutBubble,
@@ -137,76 +137,93 @@ func NewDemoModel() *Model {
 		RenderMD:      true,
 		NotifyEnabled: true,
 		Theme:         gfx.LightTheme(),
-		Split:         ui.SplitterState{Pos: 320},
+		Split:         ui.SplitterState{Pos: 300},
 		Messages:      make(map[int][]dc.Message),
 		Windows:       make(map[int]history.Window),
 		SelectedMsgs:  make(map[int]bool),
 		ImageCache:    make(map[string]gfx.Bitmap),
 		NewAcctRelay:  dc.DefaultChatmailRelay,
-		InviteLink:    "https://i.delta.chat/#demo-invite-preview",
 		NextLocalID:   5000,
-		Accounts: []dc.Account{
-			{ID: 1, Kind: "Configured", DisplayName: "Alice", Addr: "alice@nine.testrun.org"},
-			{ID: 2, Kind: "Configured", DisplayName: "Work Profile", Addr: "dev@chatmail.example"},
+	}
+}
+
+// NewDemoModel constructs an interactive offline preview populated with realistic
+// encrypted Delta Chat conversations and common-format attachment fixtures.
+func NewDemoModel() *Model {
+	now := time.Now().Unix()
+	m := newBaseModel()
+	m.DemoMode = true
+	m.StatusText = "Offline Preview (start with deltachat-rpc-server for live chat)"
+	m.ActiveAcctID = 1
+	m.ActiveChatID = 10
+	m.InviteLink = "https://i.delta.chat/#demo-invite-preview"
+	m.Accounts = []dc.Account{
+		{ID: 1, Kind: "Configured", DisplayName: "Alice", Addr: "alice@nine.testrun.org"},
+		{ID: 2, Kind: "Configured", DisplayName: "Work Profile", Addr: "dev@chatmail.example"},
+	}
+	m.Chats = []dc.ChatEntry{
+		{
+			ID: 10, Name: "Parla → Viva Migration", Kind: dc.ChatGroup, ChatType: "Group",
+			SummaryPrefix: "Bob", LastMessage: "Shared desktop preview, notes.md & metrics.csv",
+			UnreadCount: 2, Timestamp: now - 120, IsPinned: true, WasSeenRecently: true,
 		},
-		Chats: []dc.ChatEntry{
-			{
-				ID: 10, Name: "Parla → Viva Migration", Kind: dc.ChatGroup, ChatType: "Group",
-				SummaryPrefix: "Bob", LastMessage: "Shared desktop screenshot & multi-image support!",
-				UnreadCount: 2, Timestamp: now - 120, IsPinned: true, WasSeenRecently: true,
-			},
-			{
-				ID: 11, Name: "Elena (Chatmail)", Kind: dc.ChatDirect, ChatType: "Single",
-				LastMessage: "Shared Webxdc poll: Release checklist",
-				UnreadCount: 1, Timestamp: now - 900, WasSeenRecently: true,
-			},
-			{
-				ID: 12, Name: "Saved Messages", Kind: dc.ChatSavedMessages, ChatType: "Single",
-				LastMessage: "viva package --zip builds single native binary",
-				UnreadCount: 0, Timestamp: now - 3600, IsPinned: true,
-			},
-			{
-				ID: 13, Name: "Linux Desktop Channel", Kind: dc.ChatChannel, ChatType: "Broadcast",
-				LastMessage: "Vulkan + CPU fallback verified on Debian X11",
-				UnreadCount: 0, Timestamp: now - 7200, IsMuted: true,
-			},
+		{
+			ID: 11, Name: "Elena (Chatmail)", Kind: dc.ChatDirect, ChatType: "Single",
+			LastMessage: "Shared Webxdc poll: Release checklist",
+			UnreadCount: 1, Timestamp: now - 900, WasSeenRecently: true,
+		},
+		{
+			ID: 12, Name: "Saved Messages", Kind: dc.ChatSavedMessages, ChatType: "Single",
+			LastMessage: "viva package --zip builds single native binary",
+			UnreadCount: 0, Timestamp: now - 3600, IsPinned: true,
+		},
+		{
+			ID: 13, Name: "Linux Desktop Channel", Kind: dc.ChatChannel, ChatType: "Broadcast",
+			LastMessage: "Vulkan + CPU fallback verified on Debian X11",
+			UnreadCount: 0, Timestamp: now - 7200, IsMuted: true,
 		},
 	}
 
-	// Pre-populate a crisp sample bitmap for the demo image message.
 	m.ImageCache["demo://preview-desktop.png"] = DemoGradientBitmap(320, 200, 3)
 
 	m.Messages[10] = []dc.Message{
 		{
 			ID: 1001, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
-			Text:      "Welcome to Parla Viva! Right-click any chat or message for Telegram-style quick actions.",
-			Timestamp: now - 1800, ViewType: "Text", State: dc.MsgStateInSeen, IsPinned: true,
+			Text:      "Welcome to Parla Viva! Right-click any chat or message for Telegram-style actions.",
+			Timestamp: now - 86400, ViewType: "Text", State: dc.MsgStateInSeen, IsPinned: true,
 			Reactions: []dc.Reaction{{Emoji: "👍", Count: 2, BySelf: true}},
 		},
 		{
 			ID: 1002, ChatID: 10, SenderContactID: 1, SenderName: "Alice", IsOutgoing: true,
-			Text:      "No GTK4/libadwaita/MSYS2 bundling needed — Viva renders directly with Metal, Direct3D 11, or Vulkan.",
+			Text:      "Unified Telegram-style UI with direct in-app previews for images, Markdown, JSON, CSV tables, code, ZIP & vCard.",
 			Timestamp: now - 1200, ViewType: "Text", State: dc.MsgStateOutMdnRcvd,
 		},
 		{
 			ID: 1003, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
-			Text:      "Click the image below to open the Lightbox zoom viewer, or drag & drop multiple photos into the window.",
-			Timestamp: now - 120, ViewType: "Image", FilePath: "demo://preview-desktop.png", FileName: "preview-desktop.png",
+			Text:      "Click the image to zoom in, or drag & drop multiple photos directly into the window.",
+			Timestamp: now - 300, ViewType: "Image", FilePath: "demo://preview-desktop.png", FileName: "preview-desktop.png",
 			FileBytes: 184320, State: dc.MsgStateInFresh,
-			Quote:     &dc.Quote{MessageID: 1002, AuthorName: "Alice", Text: "No GTK4/libadwaita/MSYS2 bundling needed..."},
+			Quote:     &dc.Quote{MessageID: 1002, AuthorName: "Alice", Text: "Unified Telegram-style UI with direct in-app previews..."},
 			Reactions: []dc.Reaction{{Emoji: "🔥", Count: 3}},
 		},
 		{
 			ID: 1004, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
-			Text:      "Attached architecture spec for review.",
-			Timestamp: now - 60, ViewType: "File", FileName: "architecture-v0.2.pdf", FileBytes: 248320, State: dc.MsgStateInFresh,
+			Text:      "Release notes (click to preview rendered Markdown inside the app):",
+			Timestamp: now - 120, ViewType: "File", FilePath: "demo://release-notes.md", FileName: "release-notes.md",
+			FileBytes: 1024, State: dc.MsgStateInFresh,
+		},
+		{
+			ID: 1005, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
+			Text:      "Cross-platform build metrics (click to preview as interactive Table):",
+			Timestamp: now - 60, ViewType: "File", FilePath: "demo://build-metrics.csv", FileName: "build-metrics.csv",
+			FileBytes: 512, State: dc.MsgStateInFresh,
 		},
 	}
 
 	m.Messages[11] = []dc.Message{
 		{
 			ID: 2001, ChatID: 11, SenderContactID: 3, SenderName: "Elena",
-			Text:      "Hey! I sent a Webxdc release checklist mini-app. Click Open Webxdc to inspect the offline sandbox bridge.",
+			Text:      "Hey! I sent a Webxdc release checklist mini-app.",
 			Timestamp: now - 900, ViewType: "Webxdc", FileName: "checklist.xdc", State: dc.MsgStateInFresh,
 		},
 	}
@@ -237,18 +254,14 @@ func NewDemoModel() *Model {
 	return m
 }
 
-// NewLiveModel initializes a Model backed by a connected dc.Client.
+// NewLiveModel initializes a clean Model backed by a real deltachat-rpc-server
+// with zero fake demo accounts or placeholder chats.
 func NewLiveModel(client *dc.Client, invalidator *app.Invalidator) *Model {
-	m := NewDemoModel()
+	m := newBaseModel()
 	m.DemoMode = false
 	m.Client = client
 	m.Invalidator = invalidator
 	m.StatusText = "Connected to deltachat-rpc-server"
-	m.Chats = nil
-	m.Messages = make(map[int][]dc.Message)
-	m.Windows = make(map[int]history.Window)
-	m.ActiveChatID = 0
-	m.InviteLink = ""
 	return m
 }
 
@@ -272,6 +285,14 @@ func (m *Model) DrainUpdates() {
 	for _, fn := range updates {
 		fn(m)
 	}
+}
+
+// currentAccountID safely reads ActiveAcctID for background sync goroutines.
+func (m *Model) currentAccountID() int {
+	m.mu.Lock()
+	id := m.ActiveAcctID
+	m.mu.Unlock()
+	return id
 }
 
 // ActiveAccount returns the currently selected Account or nil.
@@ -299,10 +320,6 @@ func (m *Model) FilteredChats() []dc.ChatEntry {
 			}
 		case "Pinned":
 			if !ch.IsPinned {
-				continue
-			}
-		case "Groups":
-			if ch.Kind != dc.ChatGroup && ch.Kind != dc.ChatChannel {
 				continue
 			}
 		}
@@ -356,8 +373,20 @@ func (m *Model) loadChatMessagesAsync(acctID, chatID int) {
 	if err != nil {
 		return
 	}
-	_ = m.Client.MarkSeenMsgs(ctx, acctID, win.VisibleIDs())
+	// Only mark incoming unread messages as seen (never outgoing/info rows).
+	var unseen []int
+	for _, msg := range msgs {
+		if !msg.IsOutgoing && !msg.IsInfo && msg.State < dc.MsgStateInSeen {
+			unseen = append(unseen, msg.ID)
+		}
+	}
+	if len(unseen) > 0 {
+		_ = m.Client.MarkSeenMsgs(ctx, acctID, unseen)
+	}
 	m.EnqueueUpdate(func(model *Model) {
+		if model.ActiveAcctID != acctID {
+			return
+		}
 		model.Windows[chatID] = win
 		model.Messages[chatID] = msgs
 	})
@@ -431,14 +460,14 @@ func (m *Model) SendDraft() {
 			}
 			m.Messages[chatID] = append(m.Messages[chatID], msg)
 		}
-		preview := fmt.Sprintf("Sent %d attachments", len(files))
+		previewText := fmt.Sprintf("Sent %d attachments", len(files))
 		if len(files) == 1 {
-			preview = "Attachment: " + files[0].Name
+			previewText = "Attachment: " + files[0].Name
 		}
 		if text != "" {
-			preview = text
+			previewText = text
 		}
-		m.updateChatPreview(chatID, preview, now)
+		m.updateChatPreview(chatID, previewText, now)
 		return
 	}
 
@@ -471,10 +500,10 @@ func (m *Model) SendDraft() {
 	}()
 }
 
-func (m *Model) updateChatPreview(chatID int, preview string, ts int64) {
+func (m *Model) updateChatPreview(chatID int, previewText string, ts int64) {
 	for i := range m.Chats {
 		if m.Chats[i].ID == chatID {
-			m.Chats[i].LastMessage = preview
+			m.Chats[i].LastMessage = previewText
 			m.Chats[i].SummaryPrefix = "You"
 			m.Chats[i].Timestamp = ts
 		}
@@ -522,7 +551,7 @@ func (m *Model) ToggleReaction(chatID, msgID int, emoji string) {
 	}
 }
 
-// CreateDemoChat creates a new local chat entry (used in demo mode or quick onboarding).
+// CreateDemoChat creates a new local chat entry.
 func (m *Model) CreateDemoChat(name, addr string) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -589,26 +618,56 @@ func (m *Model) SearchMatches() []int {
 	return out
 }
 
-// StartLiveSync loads initial accounts & chatlist and starts the event loop.
+// StartLiveSync loads configured accounts & chatlist and runs the live event loop.
 func (m *Model) StartLiveSync(ctx context.Context) {
 	if m.Client == nil {
 		return
 	}
 	go func() {
 		accounts, err := m.Client.GetAllAccounts(ctx)
-		if err != nil || len(accounts) == 0 {
+		if err != nil {
+			m.EnqueueUpdate(func(model *Model) {
+				model.StatusText = "RPC error: " + err.Error()
+			})
 			return
 		}
-		acctID := accounts[0].ID
-		_ = m.Client.SelectAccount(ctx, acctID)
-		_ = m.Client.StartIOForAllAccounts(ctx)
-		ids, _ := m.Client.GetChatlistEntries(ctx, acctID, nil, "")
-		chats, _ := m.Client.GetChatlistItems(ctx, acctID, ids)
-		qr, _ := m.Client.GetChatSecurejoinQRCode(ctx, acctID, 0)
+		// Hydrate display names & addresses and pick the first Configured profile.
+		chosenID := 0
+		for i := range accounts {
+			if accounts[i].DisplayName == "" {
+				if dn, err := m.Client.GetConfig(ctx, accounts[i].ID, "displayname"); err == nil && dn != "" {
+					accounts[i].DisplayName = dn
+				}
+			}
+			if accounts[i].Addr == "" {
+				if addr, err := m.Client.GetConfig(ctx, accounts[i].ID, "addr"); err == nil && addr != "" {
+					accounts[i].Addr = addr
+				}
+			}
+			if accounts[i].DisplayName == "" {
+				accounts[i].DisplayName = fmt.Sprintf("Account #%d", accounts[i].ID)
+			}
+			if chosenID == 0 && accounts[i].Kind == "Configured" {
+				chosenID = accounts[i].ID
+			}
+		}
+		if chosenID == 0 && len(accounts) > 0 {
+			chosenID = accounts[0].ID
+		}
+
+		var chats []dc.ChatEntry
+		var qr string
+		if chosenID > 0 {
+			_ = m.Client.SelectAccount(ctx, chosenID)
+			_ = m.Client.StartIOForAllAccounts(ctx)
+			ids, _ := m.Client.GetChatlistEntries(ctx, chosenID, nil, "")
+			chats, _ = m.Client.GetChatlistItems(ctx, chosenID, ids)
+			qr, _ = m.Client.GetChatSecurejoinQRCode(ctx, chosenID, 0)
+		}
 
 		m.EnqueueUpdate(func(model *Model) {
 			model.Accounts = accounts
-			model.ActiveAcctID = acctID
+			model.ActiveAcctID = chosenID
 			model.Chats = chats
 			model.InviteLink = qr
 			if len(chats) > 0 && model.ActiveChatID == 0 {
@@ -623,13 +682,17 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 			}
 			switch ev.Event.Kind {
 			case "IncomingMsg", "MsgsChanged", "MsgDelivered", "MsgRead", "ReactionsChanged":
-				chatIDs, err := m.Client.GetChatlistEntries(ctx, acctID, nil, "")
+				activeAcct := m.currentAccountID()
+				if activeAcct <= 0 || ev.ContextID != activeAcct {
+					continue
+				}
+				chatIDs, err := m.Client.GetChatlistEntries(ctx, activeAcct, nil, "")
 				if err == nil {
-					updatedChats, _ := m.Client.GetChatlistItems(ctx, acctID, chatIDs)
+					updatedChats, _ := m.Client.GetChatlistItems(ctx, activeAcct, chatIDs)
 					m.EnqueueUpdate(func(model *Model) {
 						model.Chats = updatedChats
 						if ev.Event.ChatID == model.ActiveChatID && ev.Event.ChatID > 0 {
-							go model.loadChatMessagesAsync(acctID, ev.Event.ChatID)
+							go model.loadChatMessagesAsync(activeAcct, ev.Event.ChatID)
 						}
 					})
 				}
@@ -708,4 +771,62 @@ func (m *Model) HandleFileDrop(ev gfx.FileDropEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true, Repaint: true}
 	}
 	return gfx.EventResult{}
+}
+
+// OpenPreviewForMessage opens the universal in-app preview modal for images, Markdown, JSON, CSV, code, ZIP, vCard, or binary files.
+func (m *Model) OpenPreviewForMessage(msg dc.Message) {
+	name := msg.FileName
+	if name == "" && msg.FilePath != "" {
+		name = filepath.Base(msg.FilePath)
+	}
+	if name == "" {
+		return
+	}
+	if msg.ViewType == "Webxdc" {
+		m.OpenWebxdcMessage(msg)
+		return
+	}
+
+	var doc preview.Document
+	if strings.HasPrefix(msg.FilePath, "demo://") {
+		doc = demoPreviewDocument(name, msg.FilePath)
+	} else if msg.FilePath != "" {
+		loaded, err := preview.LoadFile(msg.FilePath)
+		if err == nil {
+			doc = loaded
+		} else {
+			doc = preview.Document{Path: msg.FilePath, Name: name, SizeBytes: msg.FileBytes, Kind: preview.DetectKind(name)}
+		}
+	} else {
+		doc = preview.Document{Name: name, SizeBytes: msg.FileBytes, Kind: preview.DetectKind(name)}
+	}
+
+	m.PreviewDoc = doc
+	m.PreviewBitmap = gfx.Bitmap{}
+	m.PreviewZoom = 0
+	if doc.Kind == preview.KindImage {
+		if bmp, ok := m.MessageBitmap(msg); ok {
+			m.PreviewBitmap = bmp
+		}
+	}
+	if doc.Kind == preview.KindMarkdown {
+		m.PreviewMD.Source = doc.Text
+	}
+	if doc.Kind == preview.KindCSV {
+		m.PreviewRows = ui.TableRows(doc.Rows)
+	}
+	m.PreviewOpen = true
+}
+
+func demoPreviewDocument(name, uri string) preview.Document {
+	switch uri {
+	case "demo://release-notes.md":
+		raw := "# Parla Viva v0.3.0\n\n- **Unified Telegram Desktop UI**: Clean 2-pane chrome, date dividers, right-click menus.\n- **In-App Previewer**: Direct preview for Images, Markdown, JSON, CSV tables, Code, ZIP & vCard.\n- **Windows Polish**: Hidden RPC subprocess window & `%LOCALAPPDATA%\\parla\\accounts` auto-discovery.\n"
+		return preview.ParseBytes(name, []byte(raw), int64(len(raw)), false)
+	case "demo://build-metrics.csv":
+		raw := "Platform,Arch,PackageSize,Status\nWindows,amd64,2.76 MB,Verified\nmacOS,arm64,2.42 MB,Verified\nLinux,amd64,3.06 MB,Verified\n"
+		return preview.ParseBytes(name, []byte(raw), int64(len(raw)), false)
+	default:
+		return preview.Document{Path: uri, Name: name, Kind: preview.DetectKind(name)}
+	}
 }

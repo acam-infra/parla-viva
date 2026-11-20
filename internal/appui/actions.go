@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/vivaui/viva/app"
-	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 
 	"github.com/acam-infra/parla-viva/internal/backup"
@@ -135,17 +134,6 @@ func (m *Model) CopyInviteLink() {
 	}
 	_ = app.SetClipboardText(m.InviteLink)
 	m.Toaster.Show("Invite link copied", "Paste into Parla on Windows/Linux/macOS", ui.ToastSuccess)
-}
-
-// OpenLightbox opens the Telegram-style image preview modal.
-func (m *Model) OpenLightbox(title string, bmp gfx.Bitmap) {
-	if bmp.Width <= 0 || bmp.Height <= 0 {
-		return
-	}
-	m.LightboxTitle = title
-	m.LightboxBitmap = bmp
-	m.LightboxZoom = 0 // 0 = fit to viewport
-	m.LightboxOpen = true
 }
 
 // TogglePinChat pins or unpins the active chat.

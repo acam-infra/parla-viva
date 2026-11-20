@@ -1,6 +1,9 @@
 package dc
 
-import "time"
+import (
+	"time"
+	"unicode"
+)
 
 // ChatKind classifies a Delta Chat conversation (mirrors Parla's ChatKind).
 type ChatKind int
@@ -178,20 +181,36 @@ type EventPayload struct {
 	Reaction  string `json:"reaction,omitempty"`
 }
 
+// DateLabel formats the message calendar day (Today / Yesterday / YYYY-MM-DD).
+func (m Message) DateLabel() string {
+	if m.Timestamp <= 0 {
+		return ""
+	}
+	t := time.Unix(m.Timestamp, 0)
+	now := time.Now()
+	y1, m1, d1 := t.Date()
+	y2, m2, d2 := now.Date()
+	if y1 == y2 && m1 == m2 && d1 == d2 {
+		return "Today"
+	}
+	yest := now.AddDate(0, 0, -1)
+	y3, m3, d3 := yest.Date()
+	if y1 == y3 && m1 == m3 && d1 == d3 {
+		return "Yesterday"
+	}
+	return t.Format("2006-01-02")
+}
+
 func initialsFromName(name string) string {
-	runes := []rune(name)
 	var out []rune
 	takeNext := true
-	for _, r := range runes {
-		if r == ' ' || r == '-' || r == '_' || r == '.' {
+	for _, r := range name {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
 			takeNext = true
 			continue
 		}
 		if takeNext {
-			if r >= 'a' && r <= 'z' {
-				r -= 'a' - 'A'
-			}
-			out = append(out, r)
+			out = append(out, unicode.ToUpper(r))
 			if len(out) == 2 {
 				break
 			}

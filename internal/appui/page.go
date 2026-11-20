@@ -8,12 +8,14 @@ import (
 	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
+	uimarkdown "github.com/vivaui/viva/ui/markdown"
 	"github.com/vivaui/viva/ui/message"
 
 	"github.com/acam-infra/parla-viva/internal/dc"
+	"github.com/acam-infra/parla-viva/internal/preview"
 )
 
-// Page renders the Telegram-inspired desktop UI for Parla Viva.
+// Page renders the unified Telegram-Desktop-inspired UI for Parla Viva.
 func (m *Model) Page(c ui.C) {
 	theme := c.Theme()
 
@@ -40,32 +42,28 @@ func (m *Model) Page(c ui.C) {
 	ui.Stack(c).Fill().Children(func() {
 		ui.Column(c).Fill().Background(theme.Background).Children(func() {
 			if m.DemoMode {
-				ui.Row(c).FillWidth().PadX(14).PadY(6).Gap(10).Items(ui.Center).
+				ui.Row(c).FillWidth().PadX(14).PadY(5).Gap(10).Items(ui.Center).
 					Background(theme.Muted).Border(1, theme.Border).Children(func() {
 					ui.Text(c, "Offline Preview").FontSize(12).Bold().Color(theme.Primary).Shrink(0)
 					ui.Text(c, m.StatusText).FontSize(12).Muted().Grow(1).Ellipsis()
-					if ui.Button(c, "Invite / Join").XSmall().Outline().Clicked() {
+					if ui.Button(c, "Invite / Pair").XSmall().Outline().Clicked() {
 						m.InviteOpen = true
-					}
-					if ui.Button(c, "Settings").XSmall().Ghost().Clicked() {
-						m.SettingsOpen = true
 					}
 				})
 			}
 
 			ui.Row(c).Fill().Grow(1).Children(func() {
 				m.sidebarPane(c)
-				ui.Splitter(c, &m.Split).Mins(260, 380).SplitterThickness(1)
+				ui.Splitter(c, &m.Split).Mins(260, 420).SplitterThickness(1)
 				m.conversationPane(c)
 			})
 		})
 
-		// Telegram-style drag-and-drop overlay indicator
 		if m.DragOver {
 			ui.Column(c).Fill().Center().Background(gfx.Color{Alpha: 0.45}).Children(func() {
 				ui.Column(c).Pad(28).Radius(14).Background(theme.Card).Border(2, theme.Primary).Dashed().Center().Gap(6).Children(func() {
 					ui.Text(c, "Drop images or files to send").FontSize(18).Bold().Color(theme.Primary)
-					ui.Text(c, "Supports multiple images (PNG, JPEG, GIF) and documents").FontSize(13).Muted()
+					ui.Text(c, "Supports multiple images, Markdown, JSON, CSV, code, ZIP & vCard").FontSize(13).Muted()
 				})
 			})
 		}
@@ -77,7 +75,7 @@ func (m *Model) Page(c ui.C) {
 	m.accountsModal(c)
 	m.chatInfoModal(c)
 	m.galleryModal(c)
-	m.lightboxModal(c)
+	m.previewModal(c)
 	m.settingsModal(c)
 	m.newChatModal(c)
 	m.webxdcDrawer(c)
@@ -88,29 +86,42 @@ func (m *Model) sidebarPane(c ui.C) {
 	theme := c.Theme()
 	ui.Column(c).Width(m.Split.Pos).FillHeight().Pad(12).Gap(10).
 		Background(theme.Card).Children(func() {
+		// Unified clean sidebar header: Title + Actions menu + Settings
 		ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
-			ui.Text(c, "Parla Viva").FontSize(16).Bold().Shrink(0)
+			ui.Text(c, "Parla Viva").FontSize(15.5).Bold().Shrink(0)
 			ui.Spacer(c)
-			if ui.Button(c, "Invite").XSmall().Outline().Clicked() {
-				m.InviteOpen = true
+			newBtn := ui.Button(c, "+").XSmall().Outline()
+			if newBtn.Clicked() {
+				m.NewMenuOpen = !m.NewMenuOpen
 			}
-			if ui.Button(c, "New").XSmall().Ghost().Clicked() {
-				m.NewChatOpen = true
-			}
-			if ui.Button(c, "Quick").XSmall().Ghost().Clicked() {
-				m.QuickOpen = true
-				m.QuickQuery = ""
+			ui.Menu(c, newBtn, &m.NewMenuOpen, func(menu *ui.MenuItems) {
+				if menu.Item("New Encrypted Chat").Clicked() {
+					m.NewChatOpen = true
+				}
+				if menu.Item("Invite / Join via Link").Clicked() {
+					m.InviteOpen = true
+				}
+				if menu.Item("Quick Switch Chat (Ctrl+K)").Clicked() {
+					m.QuickOpen = true
+					m.QuickQuery = ""
+				}
+			})
+			if ui.Button(c, "Settings").XSmall().Ghost().Clicked() {
+				m.SettingsOpen = true
 			}
 		})
 
-		ui.TextField(c, &m.SidebarQuery, "Search chats", "Search chats or messages...").FillWidth()
+		ui.TextField(c, &m.SidebarQuery, "Search chats", "Search...").FillWidth().Radius(8)
 		ui.Choice(c, &m.SidebarFilter, ChatFilters, nil)
 
 		chats := m.FilteredChats()
-		ui.Scroll(c).Grow(1).Gap(4).Scrollbars().Children(func() {
+		ui.Scroll(c).Grow(1).Gap(2).Scrollbars().Children(func() {
 			if len(chats) == 0 {
-				ui.Column(c).FillWidth().PadY(24).Items(ui.Center).Children(func() {
-					ui.Text(c, "No matching chats").FontSize(13).Muted()
+				ui.Column(c).FillWidth().PadY(24).Gap(8).Items(ui.Center).Children(func() {
+					ui.Text(c, "No conversations").FontSize(13).Muted()
+					if ui.Button(c, "Invite / Join").XSmall().Outline().Clicked() {
+						m.InviteOpen = true
+					}
 				})
 				return
 			}
@@ -134,7 +145,7 @@ func (m *Model) sidebarPane(c ui.C) {
 					}
 					ui.Stack(c).Size(40, 40).Shrink(0).Children(func() {
 						ui.Row(c).Size(40, 40).Radius(20).Background(avatarBg).Center().Children(func() {
-							ui.Text(c, chat.Initials()).FontSize(11).Bold().Color(avatarFg)
+							ui.Text(c, chat.Initials()).FontSize(12).Bold().Color(avatarFg)
 						})
 						if chat.WasSeenRecently {
 							ui.Row(c).Absolute().Right(1).Bottom(1).Size(10, 10).Radius(5).
@@ -155,21 +166,20 @@ func (m *Model) sidebarPane(c ui.C) {
 								})
 							}
 						})
-						preview := chat.LastMessage
+						previewLine := chat.LastMessage
 						if chat.SummaryPrefix != "" {
-							preview = chat.SummaryPrefix + ": " + preview
+							previewLine = chat.SummaryPrefix + ": " + previewLine
 						}
-						if preview == "" {
-							preview = "No messages yet"
+						if previewLine == "" {
+							previewLine = "No messages yet"
 						}
-						ui.Text(c, preview).FontSize(12).Muted().Ellipsis()
+						ui.Text(c, previewLine).FontSize(12).Muted().Ellipsis()
 					})
 				})
 				if row.Clicked() {
 					id := chat.ID
 					c.After(func() { m.SelectChat(id) })
 				}
-				// Telegram-style right-click context menu on chat list rows
 				ui.ContextMenu(c, row, func(menu *ui.MenuItems) {
 					pinLabel := "Pin chat"
 					if chat.IsPinned {
@@ -201,14 +211,14 @@ func (m *Model) sidebarPane(c ui.C) {
 
 		ui.Divider(c)
 		ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
-			acctLabel := "No account"
+			acctLabel := "Setup account"
 			if acct := m.ActiveAccount(); acct != nil {
 				acctLabel = acct.DisplayName
 			}
 			if ui.Button(c, "Accounts").XSmall().Outline().Clicked() {
 				m.AccountsOpen = true
 			}
-			ui.Text(c, acctLabel).FontSize(11.5).Muted().Ellipsis().Grow(1)
+			ui.Text(c, acctLabel).FontSize(12).Muted().Ellipsis().Grow(1)
 			themeLabel := "Dark"
 			if m.DarkMode {
 				themeLabel = "Light"
@@ -228,19 +238,29 @@ func (m *Model) conversationPane(c ui.C) {
 		if activeChat == nil {
 			ui.Column(c).Fill().Center().Gap(10).Children(func() {
 				ui.Text(c, "Select a conversation").FontSize(18).Bold()
-				ui.Text(c, "Choose a chat on the left, press Ctrl+K, or pair with Parla via Invite / Join.").FontSize(13).Muted()
-				if ui.Button(c, "Invite / Join Chat").Small().Outline().Clicked() {
-					m.InviteOpen = true
-				}
+				ui.Text(c, "Choose a chat on the left, or pair with Parla using an invite link.").FontSize(13).Muted()
+				ui.Row(c).Gap(8).Children(func() {
+					if ui.Button(c, "Invite / Join Chat").Small().Clicked() {
+						m.InviteOpen = true
+					}
+					if len(m.Accounts) == 0 {
+						if ui.Button(c, "Create Chatmail Account").Small().Outline().Clicked() {
+							m.InviteOpen = true
+						}
+					}
+				})
 			})
 			return
 		}
 
-		// Conversation header bar
-		ui.Row(c).FillWidth().PadX(18).PadY(12).Gap(8).Items(ui.Center).
+		// Unified clean conversation header (Avatar + Title + Find + Gallery + More menu)
+		ui.Row(c).FillWidth().PadX(16).PadY(10).Gap(10).Items(ui.Center).
 			Background(theme.Card).Border(1, theme.Border).Children(func() {
-			ui.Column(c).Grow(1).Gap(2).Children(func() {
-				ui.Text(c, activeChat.Name).FontSize(15).Bold()
+			ui.Row(c).Size(36, 36).Radius(18).Shrink(0).Background(theme.Secondary).Center().Children(func() {
+				ui.Text(c, activeChat.Initials()).FontSize(12).Bold()
+			})
+			ui.Column(c).Grow(1).Gap(1).Children(func() {
+				ui.Text(c, activeChat.Name).FontSize(15).Bold().Ellipsis()
 				meta := activeChat.ChatType
 				if meta == "" {
 					meta = "Encrypted"
@@ -253,29 +273,36 @@ func (m *Model) conversationPane(c ui.C) {
 				}
 				ui.Text(c, meta).FontSize(12).Muted()
 			})
-			if ui.Button(c, "Gallery").XSmall().Outline().Clicked() {
-				m.GalleryOpen = true
-			}
-			if ui.Button(c, "Info").XSmall().Outline().Clicked() {
-				m.ChatInfoOpen = true
-			}
-			if ui.Button(c, "Select").XSmall().Ghost().Clicked() {
-				m.Selecting = !m.Selecting
-				if !m.Selecting {
-					m.SelectedMsgs = make(map[int]bool)
-				}
-			}
-			if ui.Button(c, "Find").XSmall().Outline().Clicked() {
+			if ui.Button(c, "Find").XSmall().Ghost().Clicked() {
 				m.SearchOpen = !m.SearchOpen
 			}
-			if ui.Button(c, "Settings").XSmall().Ghost().Clicked() {
-				m.SettingsOpen = true
+			if ui.Button(c, "Gallery").XSmall().Ghost().Clicked() {
+				m.GalleryOpen = true
 			}
+			moreBtn := ui.Button(c, "More").XSmall().Outline()
+			if moreBtn.Clicked() {
+				m.MoreMenuOpen = !m.MoreMenuOpen
+			}
+			ui.Menu(c, moreBtn, &m.MoreMenuOpen, func(menu *ui.MenuItems) {
+				if menu.Item("Chat Info").Clicked() {
+					m.ChatInfoOpen = true
+				}
+				if menu.Item("Select Messages").Clicked() {
+					m.Selecting = !m.Selecting
+					if !m.Selecting {
+						m.SelectedMsgs = make(map[int]bool)
+					}
+				}
+				menu.Separator()
+				if menu.Item("Invite / Pair Link").Clicked() {
+					m.InviteOpen = true
+				}
+			})
 		})
 
 		if m.Selecting {
 			selectedIDs := m.SelectedMessageIDs()
-			ui.Row(c).FillWidth().PadX(18).PadY(8).Gap(10).Items(ui.Center).
+			ui.Row(c).FillWidth().PadX(16).PadY(8).Gap(10).Items(ui.Center).
 				Background(theme.Accent).Children(func() {
 				ui.Textf(c, "%d selected", len(selectedIDs)).FontSize(12.5).Bold()
 				ui.Spacer(c)
@@ -290,7 +317,7 @@ func (m *Model) conversationPane(c ui.C) {
 		}
 
 		if pinned := m.PinnedMessages(); len(pinned) > 0 {
-			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(8).Items(ui.Center).
+			ui.Row(c).FillWidth().PadX(16).PadY(6).Gap(8).Items(ui.Center).
 				Background(theme.Muted).Children(func() {
 				ui.Text(c, "Pinned").FontSize(11.5).Bold().Color(theme.Primary).Shrink(0)
 				ui.Text(c, pinned[0].Text).FontSize(12).Muted().Ellipsis().Grow(1)
@@ -299,7 +326,7 @@ func (m *Model) conversationPane(c ui.C) {
 
 		if m.SearchOpen {
 			matches := m.SearchMatches()
-			ui.Row(c).FillWidth().PadX(18).PadY(8).Gap(8).Items(ui.Center).
+			ui.Row(c).FillWidth().PadX(16).PadY(8).Gap(8).Items(ui.Center).
 				Background(theme.Card).Border(1, theme.Border).Children(func() {
 				ui.TextField(c, &m.SearchQuery, "Find in chat", "Search messages...").Grow(1)
 				countText := "0 matches"
@@ -318,9 +345,9 @@ func (m *Model) conversationPane(c ui.C) {
 			})
 		}
 
-		// Message transcript
+		// Message transcript with Telegram-style date dividers
 		msgs := m.Messages[activeChat.ID]
-		ui.Scroll(c).Grow(1).FillWidth().Pad(18).Gap(10).Follow(true).Scrollbars().Children(func() {
+		ui.Scroll(c).Grow(1).FillWidth().Pad(16).Gap(8).Follow(true).Scrollbars().Children(func() {
 			if win, ok := m.Windows[activeChat.ID]; ok && win.HasEarlier() {
 				ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
 					if ui.Button(c, "Load earlier messages").XSmall().Outline().Clicked() {
@@ -330,14 +357,24 @@ func (m *Model) conversationPane(c ui.C) {
 				})
 			}
 
+			lastDate := ""
 			for i := range msgs {
+				day := msgs[i].DateLabel()
+				if day != "" && day != lastDate {
+					lastDate = day
+					ui.Row(c.Key("day-"+day)).FillWidth().Justify(ui.Center).PadY(4).Children(func() {
+						ui.Row(c).PadX(10).PadY(2).Radius(10).Background(theme.Muted).Children(func() {
+							ui.Text(c, day).FontSize(11).Muted()
+						})
+					})
+				}
 				m.renderMessage(c, msgs[i])
 			}
 		})
 
 		// Editing / Reply banner
 		if m.EditingMsgID > 0 {
-			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(10).Items(ui.Center).
+			ui.Row(c).FillWidth().PadX(16).PadY(6).Gap(10).Items(ui.Center).
 				Background(theme.Muted).Children(func() {
 				ui.Text(c, "Editing message").FontSize(12).Bold().Color(theme.Primary)
 				ui.Spacer(c)
@@ -347,7 +384,7 @@ func (m *Model) conversationPane(c ui.C) {
 				}
 			})
 		} else if m.ReplyTo != nil {
-			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(10).Items(ui.Center).
+			ui.Row(c).FillWidth().PadX(16).PadY(6).Gap(10).Items(ui.Center).
 				Background(theme.Muted).Children(func() {
 				ui.Text(c, "Replying to "+m.ReplyTo.DisplaySender()+":").FontSize(12).Bold().Color(theme.Primary).Shrink(0)
 				ui.Text(c, m.ReplyTo.Text).FontSize(12).Muted().Ellipsis().Grow(1)
@@ -357,7 +394,7 @@ func (m *Model) conversationPane(c ui.C) {
 			})
 		}
 
-		// Telegram-style horizontal multi-image / multi-file attachment strip
+		// Multi-image / multi-file attachment preview strip
 		if len(m.PendingFiles) > 0 {
 			ui.Row(c).FillWidth().PadX(14).PadY(8).Gap(8).Items(ui.Center).
 				Background(theme.Muted).Border(1, theme.Border).Children(func() {
@@ -383,7 +420,7 @@ func (m *Model) conversationPane(c ui.C) {
 			})
 		}
 
-		// Compose bar with multi-image picker
+		// Unified bottom composer bar
 		ui.Row(c).FillWidth().Pad(12).Gap(8).Items(ui.Center).
 			Background(theme.Card).Border(1, theme.Border).Children(func() {
 			if ui.Button(c, "+ Photos").Small().Outline().Clicked() {
@@ -397,8 +434,8 @@ func (m *Model) conversationPane(c ui.C) {
 					m.AddAttachments([]string{"photo-1.png", "photo-2.jpg"})
 				}
 			}
-			field := ui.TextField(c, &m.Draft, "Message", "Write a message or drop images...")
-			field.Grow(1)
+			field := ui.TextField(c, &m.Draft, "Message", "Write a message or drop files...")
+			field.Grow(1).Radius(8)
 			if m.EnterToSend && field.Submitted() {
 				m.SendDraft()
 			}
@@ -451,7 +488,7 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 	}
 
 	if m.Layout == LayoutWorkspace {
-		ui.Row(c.KeyInt(msg.ID)).FillWidth().Pad(8).Gap(10).Radius(6).
+		ui.Row(c.KeyInt(msg.ID)).FillWidth().Pad(8).Gap(10).Radius(8).
 			Hover(ui.Look{}.Background(theme.Hover)).Children(func() {
 			ui.Row(c).Size(28, 28).Radius(6).Shrink(0).Background(theme.Secondary).Center().Children(func() {
 				ui.Text(c, initialsFrom(msg.DisplaySender())).FontSize(11).Bold()
@@ -467,8 +504,8 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 						ui.Text(c, status).FontSize(11).Muted()
 					}
 				})
-				ui.Wrap(c, msg.Text).FontSize(14)
-				m.messageExtras(c, msg)
+				ui.Wrap(c, msg.Text).FontSize(13.5)
+				m.reactionPills(c, msg)
 			})
 		})
 		return
@@ -496,7 +533,7 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 	bmp, hasBmp := m.MessageBitmap(msg)
 	if msg.Quote != nil || msg.ViewType == "Webxdc" || msg.FileName != "" || hasBmp {
 		row = row.Content(func(cc ui.C) {
-			ui.Column(cc).Gap(6).Pad(10).Radius(10).MaxWidthPercent(75).
+			ui.Column(cc).Gap(6).Pad(10).Radius(12).MaxWidthPercent(75).
 				Background(bubbleBg(theme, msg.IsOutgoing)).Children(func() {
 				if msg.Quote != nil {
 					ui.Column(cc).PadLeft(8).Border(1, theme.Border).Children(func() {
@@ -506,14 +543,13 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 				}
 				if hasBmp {
 					imgBox := ui.Row(cc).Size(240, 150).Radius(8).Clip().
-						Hit(ui.ID(cc), "View "+msg.FileName)
+						Hit(ui.ID(cc), "Preview "+msg.FileName)
 					imgBox.Children(func() {
 						ui.Image(cc, bmp).Size(240, 150).Radius(8)
 					})
 					if imgBox.Clicked() {
-						title := msg.FileName
-						bCopy := bmp
-						cc.After(func() { m.OpenLightbox(title, bCopy) })
+						copied := msg
+						cc.After(func() { m.OpenPreviewForMessage(copied) })
 					}
 				}
 				fg := theme.SecondaryForeground
@@ -521,21 +557,28 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 					fg = theme.PrimaryForeground
 				}
 				if msg.Text != "" {
-					ui.Wrap(cc, msg.Text).FontSize(14).Color(fg)
+					ui.Wrap(cc, msg.Text).FontSize(13.5).Color(fg)
 				}
 				if msg.ViewType == "Webxdc" {
-					ui.Row(cc).Gap(8).Items(ui.Center).Children(func() {
-						ui.Text(cc, "Webxdc: "+msg.FileName).FontSize(12).Bold().Color(fg)
+					ui.Row(cc).Gap(8).Pad(6).Radius(8).Background(theme.Card).Items(ui.Center).Children(func() {
+						ui.Text(cc, "Webxdc").FontSize(11).Bold().Color(theme.Primary)
+						ui.Text(cc, msg.FileName).FontSize(12).Mono().Grow(1).Ellipsis()
 						if ui.Button(cc, "Open Webxdc").XSmall().Outline().Clicked() {
 							copied := msg
 							cc.After(func() { m.OpenWebxdcMessage(copied) })
 						}
 					})
 				} else if msg.FileName != "" && !hasBmp {
-					ui.Row(cc).Gap(8).Pad(6).Radius(6).Background(theme.Card).Items(ui.Center).Children(func() {
-						ui.Text(cc, "File: "+msg.FileName).FontSize(12).Mono()
+					kindLabel := string(preview.DetectKind(msg.FileName))
+					ui.Row(cc).Gap(8).Pad(8).Radius(8).Background(theme.Card).Border(1, theme.Border).Items(ui.Center).Children(func() {
+						ui.Text(cc, kindLabel).FontSize(11).Bold().Color(theme.Primary).Shrink(0)
+						ui.Text(cc, msg.FileName).FontSize(12).Mono().Grow(1).Ellipsis()
 						if msg.FileBytes > 0 {
-							ui.Textf(cc, "(%d KB)", max(msg.FileBytes/1024, 1)).FontSize(11).Muted()
+							ui.Textf(cc, "%d KB", max(msg.FileBytes/1024, 1)).FontSize(11).Muted().Shrink(0)
+						}
+						if ui.Button(cc, "Preview "+msg.FileName).XSmall().Outline().Clicked() {
+							copied := msg
+							cc.After(func() { m.OpenPreviewForMessage(copied) })
 						}
 					})
 				}
@@ -545,12 +588,14 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 		row = row.Body(msg.Text)
 	}
 
-	row = row.Actions(func(ac ui.C) {
-		m.messageExtras(ac, msg)
-	})
+	// Clean Telegram-style footer: ONLY reaction pills (no noisy button spam on every message!)
+	if len(msg.Reactions) > 0 {
+		row = row.Actions(func(ac ui.C) {
+			m.reactionPills(ac, msg)
+		})
+	}
 
 	box := message.View(c.KeyInt(msg.ID), msg.DisplaySender(), row)
-	// Telegram-style right-click context menu on every message
 	ui.ContextMenu(c, box, func(menu *ui.MenuItems) {
 		if menu.Item("Reply").Clicked() {
 			copied := msg
@@ -561,6 +606,12 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 		}
 		if menu.Item("React ❤️").Clicked() {
 			c.After(func() { m.ToggleReaction(msg.ChatID, msg.ID, "❤️") })
+		}
+		if msg.FileName != "" {
+			if menu.Item("Preview attachment").Clicked() {
+				copied := msg
+				c.After(func() { m.OpenPreviewForMessage(copied) })
+			}
 		}
 		if msg.Text != "" {
 			if menu.Item("Copy text").Clicked() {
@@ -589,7 +640,10 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 	})
 }
 
-func (m *Model) messageExtras(c ui.C, msg dc.Message) {
+func (m *Model) reactionPills(c ui.C, msg dc.Message) {
+	if len(msg.Reactions) == 0 {
+		return
+	}
 	ui.Row(c).Gap(4).Items(ui.Center).Children(func() {
 		for _, rx := range msg.Reactions {
 			label := fmt.Sprintf("%s %d", rx.Emoji, rx.Count)
@@ -604,27 +658,134 @@ func (m *Model) messageExtras(c ui.C, msg dc.Message) {
 				c.After(func() { m.ToggleReaction(msg.ChatID, msg.ID, emoji) })
 			}
 		}
-		if ui.Button(c, "Reply").XSmall().Ghost().Clicked() {
-			copied := msg
-			c.After(func() { m.ReplyTo = &copied })
-		}
-		if ui.Button(c, "+1").XSmall().Ghost().Clicked() {
-			c.After(func() { m.ToggleReaction(msg.ChatID, msg.ID, "👍") })
-		}
-		pinLabel := "Pin"
-		if msg.IsPinned {
-			pinLabel = "Unpin"
-		}
-		if ui.Button(c, pinLabel).XSmall().Ghost().Clicked() {
-			c.After(func() { m.TogglePinMessage(msg.ChatID, msg.ID) })
-		}
-		if msg.IsOutgoing {
-			if ui.Button(c, "Edit").XSmall().Ghost().Clicked() {
-				c.After(func() {
-					m.EditingMsgID = msg.ID
-					m.Draft = msg.Text
+	})
+}
+
+// previewModal renders the universal in-app previewer for Images, Markdown, CSV Tables, JSON, Code, ZIP & vCard.
+func (m *Model) previewModal(c ui.C) {
+	if !m.PreviewOpen {
+		return
+	}
+	doc := m.PreviewDoc
+	title := doc.Name
+	if title == "" {
+		title = "File Preview"
+	}
+	ui.ModalWith(c, &m.PreviewOpen, title, ui.ModalSpec{Width: 740}, func() {
+		ui.Column(c).FillWidth().Gap(10).Children(func() {
+			// Metadata header strip
+			meta := fmt.Sprintf("%s · %d bytes", doc.Kind, doc.SizeBytes)
+			if doc.Truncated {
+				meta += " · truncated"
+			}
+			ui.Row(c).FillWidth().Items(ui.Center).Gap(8).Children(func() {
+				ui.Text(c, meta).FontSize(12).Muted().Mono().Grow(1)
+				if doc.Text != "" {
+					if ui.Button(c, "Copy Content").XSmall().Outline().Clicked() {
+						_ = app.SetClipboardText(doc.Text)
+						m.Toaster.Show("Copied", doc.Name, ui.ToastSuccess)
+					}
+				}
+			})
+
+			switch doc.Kind {
+			case preview.KindImage:
+				if m.PreviewBitmap.Width > 0 {
+					ui.Slot(c).FillWidth().Height(420).Draw(func(d *ui.DrawContext) {
+						components.PaintImageView(d.Canvas, *d.Theme, d.Rect, components.ImageViewOptions{
+							Bitmap: m.PreviewBitmap,
+							Zoom:   m.PreviewZoom,
+						})
+					})
+					ui.Row(c).FillWidth().Gap(8).Justify(ui.Center).Children(func() {
+						if ui.Button(c, "Fit").XSmall().Outline().Clicked() {
+							m.PreviewZoom = 0
+						}
+						if ui.Button(c, "100%").XSmall().Outline().Clicked() {
+							m.PreviewZoom = 1
+						}
+						if ui.Button(c, "Zoom +").XSmall().Outline().Clicked() {
+							if m.PreviewZoom == 0 {
+								m.PreviewZoom = 1.5
+							} else {
+								m.PreviewZoom = min(m.PreviewZoom+0.5, 4)
+							}
+						}
+					})
+				} else {
+					ui.Text(c, "Image file not cached locally yet.").FontSize(13).Muted()
+				}
+
+			case preview.KindMarkdown:
+				m.PreviewMD.Style = uimarkdown.Style{Size: c.Theme().Metrics.FontSizeM, LineHeight: 22}
+				uimarkdown.View(c, "Markdown preview", &m.PreviewMD).FillWidth().Height(380)
+
+			case preview.KindCSV:
+				cols := make([]components.TableColumn, len(doc.Headers))
+				for i := range cols {
+					if i < len(cols)-1 {
+						cols[i] = components.TableColumn{Width: 140}
+					}
+				}
+				ui.Table(c, &m.PreviewTable, ui.TableSpec{
+					Headers: doc.Headers,
+					Source:  &m.PreviewRows,
+					Striped: true,
+					Columns: cols,
+				}).FillWidth().Height(360)
+
+			case preview.KindVCard:
+				if doc.VCard != nil {
+					ui.Column(c).FillWidth().Pad(14).Radius(10).Gap(6).Background(c.Theme().Muted).Children(func() {
+						ui.Text(c, doc.VCard.FullName).FontSize(16).Bold()
+						if doc.VCard.Org != "" {
+							ui.Text(c, "Organization: "+doc.VCard.Org).FontSize(13).Muted()
+						}
+						if doc.VCard.Email != "" {
+							ui.Text(c, "Email: "+doc.VCard.Email).FontSize(13).Mono()
+						}
+						if doc.VCard.Phone != "" {
+							ui.Text(c, "Phone: "+doc.VCard.Phone).FontSize(13).Mono()
+						}
+						if doc.VCard.Note != "" {
+							ui.Wrap(c, doc.VCard.Note).FontSize(12.5).Muted()
+						}
+					})
+				}
+
+			case preview.KindArchive:
+				ui.Scroll(c).FillWidth().Height(340).Gap(4).Scrollbars().Children(func() {
+					for i, item := range doc.ArchiveItems {
+						ui.Row(c.KeyInt(i)).FillWidth().PadX(8).PadY(4).Gap(8).Children(func() {
+							ui.Text(c, item.Name).FontSize(12.5).Mono().Grow(1).Ellipsis()
+							ui.Textf(c, "%d B", item.Size).FontSize(11.5).Muted().Mono()
+						})
+					}
+				})
+
+			case preview.KindJSON, preview.KindCode:
+				ui.Scroll(c).FillWidth().Height(380).Pad(10).Radius(8).Background(c.Theme().Muted).Scrollbars().Children(func() {
+					ui.Wrap(c, doc.Text).FontSize(12.5).Mono()
+				})
+
+			default:
+				ui.Column(c).FillWidth().Pad(16).Radius(8).Gap(6).Background(c.Theme().Muted).Children(func() {
+					ui.Text(c, "Binary attachment preview").FontSize(14).Bold()
+					ui.Text(c, "Use Open with System App below to open in your default desktop viewer.").FontSize(13).Muted()
 				})
 			}
+		})
+	}, func() {
+		if doc.Path != "" && !strings.HasPrefix(doc.Path, "demo://") {
+			if ui.Button(c, "Open with System App").Small().Outline().Clicked() {
+				_ = app.OpenPath(doc.Path)
+			}
+			if ui.Button(c, "Reveal in Folder").Small().Ghost().Clicked() {
+				_ = app.RevealPath(doc.Path)
+			}
+		}
+		if ui.Button(c, "Close").Clicked() {
+			m.PreviewOpen = false
 		}
 	})
 }
@@ -663,45 +824,6 @@ func (m *Model) inviteModal(c ui.C) {
 	}, func() {
 		if ui.Button(c, "Close").Clicked() {
 			m.InviteOpen = false
-		}
-	})
-}
-
-func (m *Model) lightboxModal(c ui.C) {
-	if !m.LightboxOpen {
-		return
-	}
-	title := m.LightboxTitle
-	if title == "" {
-		title = "Image Preview"
-	}
-	ui.ModalWith(c, &m.LightboxOpen, title, ui.ModalSpec{Width: 720}, func() {
-		ui.Column(c).FillWidth().Gap(10).Children(func() {
-			ui.Slot(c).FillWidth().Height(420).Draw(func(d *ui.DrawContext) {
-				components.PaintImageView(d.Canvas, *d.Theme, d.Rect, components.ImageViewOptions{
-					Bitmap: m.LightboxBitmap,
-					Zoom:   m.LightboxZoom,
-				})
-			})
-			ui.Row(c).FillWidth().Gap(8).Justify(ui.Center).Children(func() {
-				if ui.Button(c, "Fit").XSmall().Outline().Clicked() {
-					m.LightboxZoom = 0
-				}
-				if ui.Button(c, "100%").XSmall().Outline().Clicked() {
-					m.LightboxZoom = 1
-				}
-				if ui.Button(c, "Zoom +").XSmall().Outline().Clicked() {
-					if m.LightboxZoom == 0 {
-						m.LightboxZoom = 1.5
-					} else {
-						m.LightboxZoom = min(m.LightboxZoom+0.5, 4)
-					}
-				}
-			})
-		})
-	}, func() {
-		if ui.Button(c, "Close").Clicked() {
-			m.LightboxOpen = false
 		}
 	})
 }
@@ -820,27 +942,16 @@ func (m *Model) galleryModal(c ui.C) {
 			}
 			for _, item := range items {
 				it := item
-				ui.Row(c.KeyInt(it.ID)).FillWidth().Pad(8).Gap(10).Radius(6).
+				ui.Row(c.KeyInt(it.ID)).FillWidth().Pad(8).Gap(10).Radius(8).
 					Background(c.Theme().Muted).Items(ui.Center).Children(func() {
-					ui.Text(c, it.ViewType).FontSize(11.5).Bold().Color(c.Theme().Primary)
+					ui.Text(c, string(preview.DetectKind(it.FileName))).FontSize(11.5).Bold().Color(c.Theme().Primary)
 					ui.Text(c, it.FileName).FontSize(13).Mono().Grow(1).Ellipsis()
-					if bmp, ok := m.MessageBitmap(it); ok {
-						if ui.Button(c, "View").XSmall().Outline().Clicked() {
-							title := it.FileName
-							bCopy := bmp
-							c.After(func() {
-								m.GalleryOpen = false
-								m.OpenLightbox(title, bCopy)
-							})
-						}
-					} else if it.ViewType == "Webxdc" {
-						if ui.Button(c, "Launch").XSmall().Outline().Clicked() {
-							copied := it
-							c.After(func() {
-								m.GalleryOpen = false
-								m.OpenWebxdcMessage(copied)
-							})
-						}
+					if ui.Button(c, "Open").XSmall().Outline().Clicked() {
+						copied := it
+						c.After(func() {
+							m.GalleryOpen = false
+							m.OpenPreviewForMessage(copied)
+						})
 					}
 				})
 			}

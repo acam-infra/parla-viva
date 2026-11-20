@@ -94,6 +94,7 @@ func (t *Transport) StartProcess(binary string, accountsPath string) error {
 		return errors.New("dc: empty rpc server binary path")
 	}
 	cmd := exec.Command(binary)
+	configureSubprocess(cmd)
 	if accountsPath != "" {
 		cmd.Env = append(os.Environ(), "DC_ACCOUNTS_PATH="+accountsPath)
 	}
