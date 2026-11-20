@@ -43,6 +43,7 @@ func main() {
 				client := dc.NewClient(transport)
 				model = appui.NewLiveModel(client, inv)
 				model.AccountsPath = *accountsPath
+				model.LoadCache(*accountsPath)
 				if srv, ierr := dc.StartIPCServer(transport, *accountsPath); ierr == nil {
 					ipcSrv = srv
 					model.OnEvent = srv.PublishEvent

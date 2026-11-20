@@ -363,6 +363,13 @@ func (m *Model) SelectChat(chatID int) {
 }
 
 func (m *Model) loadChatMessagesAsync(acctID, chatID int) {
+	m.deltaSyncChatAsync(acctID, chatID, true)
+}
+
+func (m *Model) deltaSyncChatAsync(acctID, chatID int, markSeen bool) {
+	if acctID <= 0 || chatID <= 0 || m.Client == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ids, err := m.Client.GetMessageIDs(ctx, acctID, chatID)
@@ -370,26 +377,77 @@ func (m *Model) loadChatMessagesAsync(acctID, chatID int) {
 		return
 	}
 	win := history.NewLatest(ids, 0, history.DefaultBatchSize)
-	msgs, err := m.Client.GetMessages(ctx, acctID, win.VisibleIDs())
+	visible := win.VisibleIDs()
+	if len(visible) == 0 {
+		m.EnqueueUpdate(func(model *Model) {
+			if model.ActiveAcctID != acctID {
+				return
+			}
+			model.Windows[chatID] = win
+			model.Messages[chatID] = nil
+		})
+		return
+	}
+
+	// Delta optimization: snapshot already-cached IDs and only fetch missing IDs
+	// plus the last 5 tail messages (for read/delivered/edit freshness).
+	existingCh := make(chan map[int]bool, 1)
+	m.EnqueueUpdate(func(model *Model) {
+		seen := make(map[int]bool, len(model.Messages[chatID]))
+		for _, msg := range model.Messages[chatID] {
+			seen[msg.ID] = true
+		}
+		existingCh <- seen
+	})
+	var cachedIDs map[int]bool
+	select {
+	case cachedIDs = <-existingCh:
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	fetchIDs := make([]int, 0, len(visible))
+	tailStart := max(len(visible)-5, 0)
+	for i, id := range visible {
+		if len(cachedIDs) == 0 || !cachedIDs[id] || i >= tailStart {
+			fetchIDs = append(fetchIDs, id)
+		}
+	}
+	if len(fetchIDs) == 0 {
+		return
+	}
+	deltaMsgs, err := m.Client.GetMessages(ctx, acctID, fetchIDs)
 	if err != nil {
 		return
 	}
-	// Only mark incoming unread messages as seen (never outgoing/info rows).
-	var unseen []int
-	for _, msg := range msgs {
-		if !msg.IsOutgoing && !msg.IsInfo && msg.State < dc.MsgStateInSeen {
-			unseen = append(unseen, msg.ID)
+	if markSeen {
+		var unseen []int
+		for _, msg := range deltaMsgs {
+			if !msg.IsOutgoing && !msg.IsInfo && msg.State < dc.MsgStateInSeen {
+				unseen = append(unseen, msg.ID)
+			}
+		}
+		if len(unseen) > 0 {
+			_ = m.Client.MarkSeenMsgs(ctx, acctID, unseen)
 		}
 	}
-	if len(unseen) > 0 {
-		_ = m.Client.MarkSeenMsgs(ctx, acctID, unseen)
+	visibleSet := make(map[int]bool, len(visible))
+	for _, id := range visible {
+		visibleSet[id] = true
 	}
 	m.EnqueueUpdate(func(model *Model) {
 		if model.ActiveAcctID != acctID {
 			return
 		}
 		model.Windows[chatID] = win
-		model.Messages[chatID] = msgs
+		merged := mergeDeltaMessages(model.Messages[chatID], deltaMsgs)
+		filtered := make([]dc.Message, 0, len(merged))
+		for _, msg := range merged {
+			if visibleSet[msg.ID] {
+				filtered = append(filtered, msg)
+			}
+		}
+		model.Messages[chatID] = filtered
+		model.saveCacheAsync()
 	})
 }
 
@@ -657,24 +715,61 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 		}
 
 		var chats []dc.ChatEntry
-		var qr string
+		var initialChatID int
+		var initialWin history.Window
+		var initialMsgs []dc.Message
+
 		if chosenID > 0 {
 			_ = m.Client.SelectAccount(ctx, chosenID)
-			_ = m.Client.StartIOForAllAccounts(ctx)
+			// Fast path: load chatlist + first chat BEFORE slow StartIO & QR generation.
 			ids, _ := m.Client.GetChatlistEntries(ctx, chosenID, nil, "")
 			chats, _ = m.Client.GetChatlistItems(ctx, chosenID, ids)
-			qr, _ = m.Client.GetChatSecurejoinQRCode(ctx, chosenID, 0)
+			if len(chats) > 0 {
+				initialChatID = chats[0].ID
+				if msgIDs, err := m.Client.GetMessageIDs(ctx, chosenID, initialChatID); err == nil {
+					initialWin = history.NewLatest(msgIDs, 0, history.DefaultBatchSize)
+					initialMsgs, _ = m.Client.GetMessages(ctx, chosenID, initialWin.VisibleIDs())
+				}
+			}
 		}
 
 		m.EnqueueUpdate(func(model *Model) {
 			model.Accounts = accounts
 			model.ActiveAcctID = chosenID
 			model.Chats = chats
-			model.InviteLink = qr
-			if len(chats) > 0 && model.ActiveChatID == 0 {
-				model.SelectChat(chats[0].ID)
+			if initialChatID > 0 {
+				model.Windows[initialChatID] = initialWin
+				model.Messages[initialChatID] = initialMsgs
+				if model.ActiveChatID == 0 {
+					model.ActiveChatID = initialChatID
+				}
 			}
+			model.saveCacheAsync()
 		})
+
+		// Non-blocking background startup: IO, SecureJoin QR, and top-5 chat prefetch (without marking unread seen).
+		if chosenID > 0 {
+			go func(acctID int, chatList []dc.ChatEntry, skipChat int) {
+				_ = m.Client.StartIOForAllAccounts(ctx)
+				if qr, err := m.Client.GetChatSecurejoinQRCode(ctx, acctID, 0); err == nil && qr != "" {
+					m.EnqueueUpdate(func(model *Model) {
+						model.InviteLink = qr
+						model.saveCacheAsync()
+					})
+				}
+				prefetched := 0
+				for _, ch := range chatList {
+					if ch.ID == skipChat {
+						continue
+					}
+					m.deltaSyncChatAsync(acctID, ch.ID, false)
+					prefetched++
+					if prefetched >= 5 {
+						break
+					}
+				}
+			}(chosenID, chats, initialChatID)
+		}
 
 		for {
 			ev, err := m.Client.GetNextEvent(ctx)
@@ -690,11 +785,29 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 				if activeAcct <= 0 || ev.ContextID != activeAcct {
 					continue
 				}
+				// O(1) incremental delta sync when a specific message ID changed
+				if ev.Event.MsgID > 0 && ev.Event.ChatID > 0 {
+					deltaMsgs, merr := m.Client.GetMessages(ctx, activeAcct, []int{ev.Event.MsgID})
+					deltaChats, cerr := m.Client.GetChatlistItems(ctx, activeAcct, []int{ev.Event.ChatID})
+					if merr == nil || cerr == nil {
+						m.EnqueueUpdate(func(model *Model) {
+							if len(deltaChats) > 0 {
+								model.Chats = upsertChatEntry(model.Chats, deltaChats[0])
+							}
+							if len(deltaMsgs) > 0 {
+								model.Messages[ev.Event.ChatID] = mergeDeltaMessages(model.Messages[ev.Event.ChatID], deltaMsgs)
+							}
+							model.saveCacheAsync()
+						})
+						continue
+					}
+				}
 				chatIDs, err := m.Client.GetChatlistEntries(ctx, activeAcct, nil, "")
 				if err == nil {
 					updatedChats, _ := m.Client.GetChatlistItems(ctx, activeAcct, chatIDs)
 					m.EnqueueUpdate(func(model *Model) {
 						model.Chats = updatedChats
+						model.saveCacheAsync()
 						if ev.Event.ChatID == model.ActiveChatID && ev.Event.ChatID > 0 {
 							go model.loadChatMessagesAsync(activeAcct, ev.Event.ChatID)
 						}
