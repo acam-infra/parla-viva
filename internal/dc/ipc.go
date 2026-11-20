@@ -151,9 +151,7 @@ func (s *IPCServer) Close() error {
 	if s == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = s.server.Shutdown(ctx)
+	_ = s.server.Close()
 
 	s.subMu.Lock()
 	for ch := range s.subs {

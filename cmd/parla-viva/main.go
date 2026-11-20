@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/vivaui/viva/app"
@@ -99,21 +100,32 @@ func main() {
 	webHost.OnReady = func() {
 		model.WebReady = true
 	}
+	var cleanupOnce sync.Once
 	cleanup := func(reason string) {
-		if logger != nil {
-			logger.Info("shutdown", "reason", reason)
-		}
-		if model != nil {
-			model.Shutdown()
-		}
-		if ipcSrv != nil {
-			_ = ipcSrv.Close()
-		}
-		if transport != nil {
-			_ = transport.Close()
-		}
+		cleanupOnce.Do(func() {
+			if logger != nil {
+				logger.Info("shutdown", "reason", reason)
+			}
+			if model != nil {
+				model.Shutdown()
+			}
+			if ipcSrv != nil {
+				_ = ipcSrv.Close()
+			}
+			if transport != nil {
+				_ = transport.Close()
+			}
+			if logger != nil {
+				_ = logger.Close()
+			}
+		})
 	}
 	defer cleanup("exit")
+
+	model.OnQuit = func() {
+		cleanup("quit_shortcut")
+		os.Exit(0)
+	}
 
 	// React cleanly to SIGINT / SIGTERM: flush cache, remove IPC descriptor, close RPC server, and exit 0.
 	go func() {
@@ -128,14 +140,20 @@ func main() {
 	})
 	winIcon, _ := iconpng.Decode(assets.AppIconPNG)
 	cfg := ui.Configure(page, app.Config{
-		Title:       "Parla Viva",
-		Icon:        winIcon,
-		Width:       1200,
-		Height:      780,
-		Web:         webHost,
-		Invalidator: inv,
-		OnWake:      model.DrainUpdates,
-		OnFileDrop:  model.HandleFileDrop,
+		Title:          "Parla Viva",
+		Icon:           winIcon,
+		Width:          1200,
+		Height:         780,
+		Web:            webHost,
+		Invalidator:    inv,
+		OnWake:         model.DrainUpdates,
+		OnFileDrop:     model.HandleFileDrop,
+		OnActivate:     model.WakeNetwork,
+		OnCloseRequest: func(allow func()) { allow() },
+		OnClosed: func() {
+			cleanup("window_closed")
+			os.Exit(0)
+		},
 	})
 
 	if err := app.RunCanvas(cfg, new(gfx.Canvas)); err != nil {

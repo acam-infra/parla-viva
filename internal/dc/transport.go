@@ -325,7 +325,7 @@ func (t *Transport) Close() error {
 		go func() { done <- cmd.Wait() }()
 		select {
 		case <-done:
-		case <-time.After(2 * time.Second):
+		case <-time.After(300 * time.Millisecond):
 			_ = cmd.Process.Kill()
 			<-done
 		}

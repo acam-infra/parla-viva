@@ -49,6 +49,7 @@ type Model struct {
 	WebReady     bool
 	AccountsPath string
 	OnEvent      func(dc.Event)
+	OnQuit       func()
 	Notifier     *notify.Notifier
 	DemoMode     bool
 	StatusText   string
@@ -981,6 +982,18 @@ func safeGo(name string, fn func()) {
 		}()
 		fn()
 	}()
+}
+
+// WakeNetwork nudges deltachat-rpc-server to sync immediately when the window regains focus.
+func (m *Model) WakeNetwork() {
+	if m == nil || m.DemoMode || m.Client == nil {
+		return
+	}
+	safeGo("wake_network", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = m.Client.MaybeNetwork(ctx)
+	})
 }
 
 // Shutdown flushes cached state and closes background helpers cleanly on exit/signal.

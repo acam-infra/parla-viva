@@ -38,6 +38,11 @@ func (m *Model) Page(c ui.C) {
 	if ui.Shortcut(c, ui.Primary, ",") {
 		m.SettingsOpen = !m.SettingsOpen
 	}
+	if ui.Shortcut(c, ui.Primary, "q") {
+		if m.OnQuit != nil {
+			m.OnQuit()
+		}
+	}
 	if ui.Shortcut(c, 0, "escape") {
 		m.HandleEscape()
 	}
