@@ -20,23 +20,39 @@ jobs:
           - name: linux-amd64
             os: ubuntu-latest
             ext: ""
+            archive: tar.gz
           - name: darwin-arm64
             os: macos-latest
             ext: ""
+            archive: tar.gz
           - name: windows-amd64
             os: windows-latest
             ext: ".exe"
+            archive: zip
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
           cache: true
-      - name: Build binary
+
+      - name: Run tests before packaging
+        run: go test -count=1 ./...
+
+      - name: Build & archive release package
         shell: bash
         run: |
-          mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o "dist/parla-viva-${{ matrix.name }}${{ matrix.ext }}" ./cmd/parla-viva
+          mkdir -p dist stage
+          BIN="parla-viva${{ matrix.ext }}"
+          go build -trimpath -ldflags="-s -w" -o "stage/${BIN}" ./cmd/parla-viva
+          cp README.md LICENSE viva.toml stage/
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd stage && 7z a "../dist/parla-viva-${{ matrix.name }}.zip" .)
+          else
+            tar -C stage -czf "dist/parla-viva-${{ matrix.name }}.tar.gz" .
+          fi
+          ls -lh dist/
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -51,8 +67,16 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          cd artifacts
+          sha256sum parla-viva-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: artifacts/*
           generate_release_notes: true

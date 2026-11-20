@@ -1,6 +1,7 @@
 package appui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/vivaui/viva/app"
@@ -18,8 +19,8 @@ func openDriver(t *testing.T, m *Model) (*app.Driver, *app.Invalidator) {
 	})
 	cfg := ui.Configure(page, app.Config{
 		Title:       "Parla Viva Test",
-		Width:       1100,
-		Height:      760,
+		Width:       1200,
+		Height:      780,
 		Invalidator: inv,
 		OnWake:      m.DrainUpdates,
 	})
@@ -54,7 +55,6 @@ func TestChatSwitchAndSendMessage(t *testing.T) {
 	m := NewDemoModel()
 	driver, inv := openDriver(t, m)
 
-	// Switch to Elena's chat (ID 11) and verify unread clears.
 	clickControl(t, driver, "Elena (Chatmail)")
 	if m.ActiveChatID != 11 {
 		t.Fatalf("ActiveChatID = %d, want 11", m.ActiveChatID)
@@ -63,7 +63,6 @@ func TestChatSwitchAndSendMessage(t *testing.T) {
 		t.Fatalf("expected unread count to clear on chat switch, got %d", m.ActiveChat().UnreadCount)
 	}
 
-	// Send a message through the composer.
 	m.Draft = "Shipping Parla on Viva!"
 	inv.Invalidate()
 	if err := driver.Pump(); err != nil {
@@ -79,21 +78,33 @@ func TestChatSwitchAndSendMessage(t *testing.T) {
 	}
 }
 
-func TestSettingsAndThemeToggle(t *testing.T) {
+func TestSettingsBackupAndThemeToggle(t *testing.T) {
 	m := NewDemoModel()
 	driver, inv := openDriver(t, m)
 
-	// Toggle dark mode from sidebar footer.
 	clickControl(t, driver, "Dark")
 	if !m.DarkMode {
 		t.Fatal("expected DarkMode to be true after clicking Dark")
 	}
 
-	// Open settings modal and switch layout to Compact IRC.
 	clickControl(t, driver, "Settings")
 	if !m.SettingsOpen {
 		t.Fatal("expected SettingsOpen to be true")
 	}
+	m.BackupPassword = "test-passphrase-2026"
+	inv.Invalidate()
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	clickControl(t, driver, "Create Backup")
+	if m.LastBackupPath == "" || !strings.Contains(m.BackupStatus, "Encrypted backup saved") {
+		t.Fatalf("unexpected backup status: %q", m.BackupStatus)
+	}
+	clickControl(t, driver, "Verify Backup")
+	if !strings.Contains(m.BackupStatus, "Verified OK") {
+		t.Fatalf("unexpected verify status: %q", m.BackupStatus)
+	}
+
 	m.Layout = LayoutCompact
 	inv.Invalidate()
 	if err := driver.Pump(); err != nil {
@@ -105,17 +116,51 @@ func TestSettingsAndThemeToggle(t *testing.T) {
 	}
 }
 
+func TestMultiAccountChatInfoGalleryAndMultiSelect(t *testing.T) {
+	m := NewDemoModel()
+	driver, _ := openDriver(t, m)
+
+	// Switch account
+	clickControl(t, driver, "Accounts")
+	clickControl(t, driver, "Work Profile (dev@chatmail.example)")
+	if m.ActiveAcctID != 2 {
+		t.Fatalf("ActiveAcctID = %d, want 2", m.ActiveAcctID)
+	}
+
+	// Open Chat Info and mute chat
+	clickControl(t, driver, "Info")
+	clickControl(t, driver, "Mute Chat")
+	if !m.ActiveChat().IsMuted {
+		t.Fatal("expected active chat to be muted")
+	}
+	clickControl(t, driver, "Close")
+
+	// Open Media Gallery
+	clickControl(t, driver, "Gallery")
+	if len(m.GalleryItems()) == 0 {
+		t.Fatal("expected attachment in default chat gallery")
+	}
+	clickControl(t, driver, "Close")
+
+	// Enter Multi-Select mode, select first message, and delete it
+	before := len(m.Messages[10])
+	clickControl(t, driver, "Select")
+	clickControl(t, driver, "Select message 1001")
+	clickControl(t, driver, "Delete Selected")
+	if len(m.Messages[10]) != before-1 {
+		t.Fatalf("messages after delete = %d, want %d", len(m.Messages[10]), before-1)
+	}
+}
+
 func TestWebxdcDrawerAndReactions(t *testing.T) {
 	m := NewDemoModel()
 	driver, _ := openDriver(t, m)
 
-	// Click +1 reaction on first message.
 	clickControl(t, driver, "+1")
 	if len(m.Messages[10][0].Reactions) == 0 {
 		t.Fatal("expected reaction state on message")
 	}
 
-	// Switch to Elena's chat and open Webxdc drawer.
 	clickControl(t, driver, "Elena (Chatmail)")
 	clickControl(t, driver, "Open Webxdc")
 	if !m.WebxdcOpen || m.WebxdcTitle != "checklist.xdc" {

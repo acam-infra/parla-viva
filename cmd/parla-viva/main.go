@@ -20,6 +20,7 @@ func main() {
 	flag.Parse()
 
 	inv := new(app.Invalidator)
+	webHost := &app.WebHost{}
 	var model *appui.Model
 	var transport *dc.Transport
 
@@ -32,6 +33,7 @@ func main() {
 			if err := transport.StartProcess(bin, *accountsPath); err == nil {
 				client := dc.NewClient(transport)
 				model = appui.NewLiveModel(client, inv)
+				model.AccountsPath = *accountsPath
 				model.StartLiveSync(ctx)
 			} else {
 				log.Printf("deltachat-rpc-server start failed (%v); falling back to demo mode", err)
@@ -43,6 +45,10 @@ func main() {
 		model = appui.NewDemoModel()
 		model.Invalidator = inv
 	}
+	model.WebHost = webHost
+	webHost.OnReady = func() {
+		model.WebReady = true
+	}
 	if transport != nil {
 		defer transport.Close()
 	}
@@ -53,8 +59,9 @@ func main() {
 	})
 	cfg := ui.Configure(page, app.Config{
 		Title:       "Parla Viva",
-		Width:       1140,
-		Height:      760,
+		Width:       1200,
+		Height:      780,
+		Web:         webHost,
 		Invalidator: inv,
 		OnWake:      model.DrainUpdates,
 	})

@@ -28,16 +28,22 @@ var LayoutModes = []LayoutMode{LayoutBubble, LayoutCompact, LayoutWorkspace}
 
 var ChatFilters = []string{"All", "Unread", "Pinned", "Groups"}
 
+var GalleryTabs = []string{"All", "Files", "Webxdc"}
+
 // Model holds all application state for Parla Viva.
 // The UI page function reads from Model and mutates it strictly on the window thread.
 type Model struct {
 	mu sync.Mutex
 
 	// Live RPC client (nil when running in offline demo mode).
-	Client      *dc.Client
-	Invalidator *app.Invalidator
-	DemoMode    bool
-	StatusText  string
+	Client       *dc.Client
+	Invalidator  *app.Invalidator
+	WebHost      *app.WebHost
+	WebView      *app.WebView
+	WebReady     bool
+	AccountsPath string
+	DemoMode     bool
+	StatusText   string
 
 	// Accounts & active chat state
 	Accounts     []dc.Account
@@ -58,16 +64,27 @@ type Model struct {
 	QuickQuery    string
 
 	// Composer & message actions
-	Draft         string
-	ReplyTo       *dc.Message
-	Selecting     bool
-	SelectedMsgs  map[int]bool
-	NewChatOpen   bool
-	NewChatName   string
-	NewChatAddr   string
+	Draft          string
+	PendingFile    string
+	ReplyTo        *dc.Message
+	EditingMsgID   int
+	Selecting      bool
+	SelectedMsgs   map[int]bool
+	NewChatOpen    bool
+	NewChatName    string
+	NewChatAddr    string
 
-	// Settings & appearance
-	SettingsOpen  bool
+	// Dialogs & drawers
+	AccountsOpen   bool
+	ChatInfoOpen   bool
+	GalleryOpen    bool
+	GalleryTab     string
+	SettingsOpen   bool
+	BackupPassword string
+	LastBackupPath string
+	BackupStatus   string
+
+	// Appearance & preferences
 	DarkMode      bool
 	Theme         gfx.Theme
 	Layout        LayoutMode
@@ -98,6 +115,7 @@ func NewDemoModel() *Model {
 		ActiveAcctID:  1,
 		ActiveChatID:  10,
 		SidebarFilter: "All",
+		GalleryTab:    "All",
 		Layout:        LayoutBubble,
 		EnterToSend:   true,
 		RenderMD:      true,
@@ -110,6 +128,7 @@ func NewDemoModel() *Model {
 		NextLocalID:   5000,
 		Accounts: []dc.Account{
 			{ID: 1, Kind: "Configured", DisplayName: "Alice", Addr: "alice@nine.testrun.org"},
+			{ID: 2, Kind: "Configured", DisplayName: "Work Profile", Addr: "dev@chatmail.example"},
 		},
 		Chats: []dc.ChatEntry{
 			{
@@ -153,6 +172,11 @@ func NewDemoModel() *Model {
 			Timestamp: now - 120, ViewType: "Text", State: dc.MsgStateInFresh,
 			Quote:     &dc.Quote{MessageID: 1002, AuthorName: "Alice", Text: "No GTK4/libadwaita/MSYS2 bundling needed..."},
 			Reactions: []dc.Reaction{{Emoji: "🔥", Count: 3}},
+		},
+		{
+			ID: 1004, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
+			Text:      "Attached architecture spec for review.",
+			Timestamp: now - 60, ViewType: "File", FileName: "architecture-v0.1.pdf", FileBytes: 248320, State: dc.MsgStateInFresh,
 		},
 	}
 
@@ -226,6 +250,19 @@ func (m *Model) DrainUpdates() {
 	}
 }
 
+// ActiveAccount returns the currently selected Account or nil.
+func (m *Model) ActiveAccount() *dc.Account {
+	for i := range m.Accounts {
+		if m.Accounts[i].ID == m.ActiveAcctID {
+			return &m.Accounts[i]
+		}
+	}
+	if len(m.Accounts) > 0 {
+		return &m.Accounts[0]
+	}
+	return nil
+}
+
 // FilteredChats returns chats matching the current sidebar filter and search query.
 func (m *Model) FilteredChats() []dc.ChatEntry {
 	q := strings.ToLower(strings.TrimSpace(m.SidebarQuery))
@@ -268,6 +305,7 @@ func (m *Model) ActiveChat() *dc.ChatEntry {
 func (m *Model) SelectChat(chatID int) {
 	m.ActiveChatID = chatID
 	m.ReplyTo = nil
+	m.EditingMsgID = 0
 	m.Selecting = false
 	m.SelectedMsgs = make(map[int]bool)
 	for i := range m.Chats {
@@ -301,13 +339,24 @@ func (m *Model) loadChatMessagesAsync(acctID, chatID int) {
 	})
 }
 
-// SendDraft sends the current composer text to the active chat.
+// SendDraft sends or edits the current composer text (and optional pending attachment).
 func (m *Model) SendDraft() {
 	text := strings.TrimSpace(m.Draft)
-	if text == "" || m.ActiveChatID == 0 {
+	filePath := strings.TrimSpace(m.PendingFile)
+	if (text == "" && filePath == "") || m.ActiveChatID == 0 {
 		return
 	}
 	chatID := m.ActiveChatID
+
+	// Handle in-place message edit
+	if m.EditingMsgID > 0 {
+		msgID := m.EditingMsgID
+		m.EditingMsgID = 0
+		m.Draft = ""
+		m.ApplyEditMessage(chatID, msgID, text)
+		return
+	}
+
 	var quote *dc.Quote
 	quotedID := 0
 	if m.ReplyTo != nil {
@@ -319,10 +368,20 @@ func (m *Model) SendDraft() {
 		}
 	}
 	m.Draft = ""
+	m.PendingFile = ""
 	m.ReplyTo = nil
 
 	if m.DemoMode || m.Client == nil {
 		m.NextLocalID++
+		viewType := "Text"
+		fileName := ""
+		if filePath != "" {
+			viewType = "File"
+			fileName = filePath
+			if idx := strings.LastIndexAny(filePath, "/\\"); idx >= 0 {
+				fileName = filePath[idx+1:]
+			}
+		}
 		msg := dc.Message{
 			ID:              m.NextLocalID,
 			ChatID:          chatID,
@@ -330,15 +389,21 @@ func (m *Model) SendDraft() {
 			SenderName:      "Alice",
 			IsOutgoing:      true,
 			Text:            text,
+			FilePath:        filePath,
+			FileName:        fileName,
 			Timestamp:       time.Now().Unix(),
-			ViewType:        "Text",
+			ViewType:        viewType,
 			State:           dc.MsgStateOutDelivered,
 			Quote:           quote,
 		}
 		m.Messages[chatID] = append(m.Messages[chatID], msg)
+		preview := text
+		if preview == "" {
+			preview = "Attachment: " + fileName
+		}
 		for i := range m.Chats {
 			if m.Chats[i].ID == chatID {
-				m.Chats[i].LastMessage = text
+				m.Chats[i].LastMessage = preview
 				m.Chats[i].SummaryPrefix = "You"
 				m.Chats[i].Timestamp = msg.Timestamp
 			}
@@ -350,7 +415,13 @@ func (m *Model) SendDraft() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := m.Client.SendTextMessage(ctx, acctID, chatID, text, quotedID); err != nil {
+		var err error
+		if filePath != "" {
+			_, err = m.Client.SendFileMessage(ctx, acctID, chatID, filePath, text)
+		} else {
+			_, err = m.Client.SendTextMessage(ctx, acctID, chatID, text, quotedID)
+		}
+		if err != nil {
 			m.EnqueueUpdate(func(model *Model) {
 				model.Toaster.Show("Send failed", err.Error(), ui.ToastError)
 			})

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 	"github.com/vivaui/viva/ui/message"
@@ -28,16 +29,18 @@ func (m *Model) Page(c ui.C) {
 	if ui.Shortcut(c, ui.Primary, "n") {
 		m.NewChatOpen = true
 	}
+	if ui.Shortcut(c, ui.Primary, "i") {
+		m.ChatInfoOpen = !m.ChatInfoOpen
+	}
 	if ui.Shortcut(c, ui.Primary, ",") {
 		m.SettingsOpen = !m.SettingsOpen
 	}
 
 	ui.Column(c).Fill().Background(theme.Background).Children(func() {
-		// Top status banner when running in demo/disconnected mode.
 		if m.DemoMode {
 			ui.Row(c).FillWidth().PadX(14).PadY(6).Gap(10).Items(ui.Center).
 				Background(theme.Muted).Border(1, theme.Border).Children(func() {
-				ui.Text(c, "Offline Preview").FontSize(12).Bold().Color(theme.Primary)
+				ui.Text(c, "Offline Preview").FontSize(12).Bold().Color(theme.Primary).Shrink(0)
 				ui.Text(c, m.StatusText).FontSize(12).Muted().Grow(1).Ellipsis()
 				if ui.Button(c, "Settings").XSmall().Outline().Clicked() {
 					m.SettingsOpen = true
@@ -45,16 +48,18 @@ func (m *Model) Page(c ui.C) {
 			})
 		}
 
-		// Main adaptive split view: Sidebar + Draggable Splitter + Conversation Pane.
 		ui.Row(c).Fill().Grow(1).Children(func() {
 			m.sidebarPane(c)
-			ui.Splitter(c, &m.Split).Mins(220, 360).SplitterThickness(1)
+			ui.Splitter(c, &m.Split).Mins(260, 380).SplitterThickness(1)
 			m.conversationPane(c)
 		})
 	})
 
 	// Overlays & modals
 	m.quickSwitcherModal(c)
+	m.accountsModal(c)
+	m.chatInfoModal(c)
+	m.galleryModal(c)
 	m.settingsModal(c)
 	m.newChatModal(c)
 	m.webxdcDrawer(c)
@@ -65,7 +70,6 @@ func (m *Model) sidebarPane(c ui.C) {
 	theme := c.Theme()
 	ui.Column(c).Width(m.Split.Pos).FillHeight().Pad(12).Gap(10).
 		Background(theme.Card).Children(func() {
-		// Header row: brand + quick actions
 		ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
 			ui.Text(c, "Parla Viva").FontSize(16).Bold().Shrink(0)
 			ui.Spacer(c)
@@ -78,13 +82,9 @@ func (m *Model) sidebarPane(c ui.C) {
 			}
 		})
 
-		// Sidebar search field
 		ui.TextField(c, &m.SidebarQuery, "Search chats", "Search chats or messages...").FillWidth()
-
-		// Filter chips
 		ui.Choice(c, &m.SidebarFilter, ChatFilters, nil)
 
-		// Filtered chat list
 		chats := m.FilteredChats()
 		ui.Scroll(c).Grow(1).Gap(4).Scrollbars().Children(func() {
 			if len(chats) == 0 {
@@ -105,7 +105,6 @@ func (m *Model) sidebarPane(c ui.C) {
 					Hover(ui.Look{}.Background(theme.Hover)).
 					Hit(ui.ID(c), chat.Name)
 				row.Children(func() {
-					// Avatar circle
 					avatarBg := theme.Secondary
 					avatarFg := theme.SecondaryForeground
 					if active {
@@ -116,12 +115,14 @@ func (m *Model) sidebarPane(c ui.C) {
 						ui.Text(c, chat.Initials()).FontSize(11).Bold().Color(avatarFg)
 					})
 
-					// Title + preview
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
 						ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
 							title := chat.Name
 							if chat.IsPinned {
 								title = "* " + title
+							}
+							if chat.IsMuted {
+								title += " (muted)"
 							}
 							ui.Text(c, title).FontSize(13.5).Bold().Ellipsis().Grow(1)
 							if chat.UnreadCount > 0 {
@@ -147,15 +148,14 @@ func (m *Model) sidebarPane(c ui.C) {
 			}
 		})
 
-		// Account footer
 		ui.Divider(c)
-		ui.Row(c).FillWidth().Gap(8).Items(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
 			acctLabel := "No account"
-			if len(m.Accounts) > 0 {
-				acctLabel = m.Accounts[0].DisplayName
-				if m.Accounts[0].Addr != "" {
-					acctLabel += " · " + m.Accounts[0].Addr
-				}
+			if acct := m.ActiveAccount(); acct != nil {
+				acctLabel = acct.DisplayName
+			}
+			if ui.Button(c, "Accounts").XSmall().Outline().Clicked() {
+				m.AccountsOpen = true
 			}
 			ui.Text(c, acctLabel).FontSize(11.5).Muted().Ellipsis().Grow(1)
 			themeLabel := "Dark"
@@ -183,7 +183,7 @@ func (m *Model) conversationPane(c ui.C) {
 		}
 
 		// Conversation header bar
-		ui.Row(c).FillWidth().PadX(18).PadY(12).Gap(10).Items(ui.Center).
+		ui.Row(c).FillWidth().PadX(18).PadY(12).Gap(8).Items(ui.Center).
 			Background(theme.Card).Border(1, theme.Border).Children(func() {
 			ui.Column(c).Grow(1).Gap(2).Children(func() {
 				ui.Text(c, activeChat.Name).FontSize(15).Bold()
@@ -194,8 +194,23 @@ func (m *Model) conversationPane(c ui.C) {
 				if activeChat.WasSeenRecently {
 					meta += " · Active recently"
 				}
+				if activeChat.IsMuted {
+					meta += " · Muted"
+				}
 				ui.Text(c, meta).FontSize(12).Muted()
 			})
+			if ui.Button(c, "Gallery").XSmall().Outline().Clicked() {
+				m.GalleryOpen = true
+			}
+			if ui.Button(c, "Info").XSmall().Outline().Clicked() {
+				m.ChatInfoOpen = true
+			}
+			if ui.Button(c, "Select").XSmall().Ghost().Clicked() {
+				m.Selecting = !m.Selecting
+				if !m.Selecting {
+					m.SelectedMsgs = make(map[int]bool)
+				}
+			}
 			if ui.Button(c, "Find").XSmall().Outline().Clicked() {
 				m.SearchOpen = !m.SearchOpen
 			}
@@ -204,11 +219,28 @@ func (m *Model) conversationPane(c ui.C) {
 			}
 		})
 
-		// Pinned messages bar (mirrors Parla pinned_messages_manager.vala)
+		// Multi-select action bar (mirrors Parla keyboard/batch selection mode)
+		if m.Selecting {
+			selectedIDs := m.SelectedMessageIDs()
+			ui.Row(c).FillWidth().PadX(18).PadY(8).Gap(10).Items(ui.Center).
+				Background(theme.Accent).Children(func() {
+				ui.Textf(c, "%d selected", len(selectedIDs)).FontSize(12.5).Bold()
+				ui.Spacer(c)
+				if ui.Button(c, "Delete Selected").XSmall().Destructive().Disabled(len(selectedIDs) == 0).Clicked() {
+					m.DeleteMessageList(activeChat.ID, selectedIDs)
+				}
+				if ui.Button(c, "Cancel Select").XSmall().Outline().Clicked() {
+					m.Selecting = false
+					m.SelectedMsgs = make(map[int]bool)
+				}
+			})
+		}
+
+		// Pinned messages bar
 		if pinned := m.PinnedMessages(); len(pinned) > 0 {
 			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(8).Items(ui.Center).
 				Background(theme.Muted).Children(func() {
-				ui.Text(c, "Pinned").FontSize(11.5).Bold().Color(theme.Primary)
+				ui.Text(c, "Pinned").FontSize(11.5).Bold().Color(theme.Primary).Shrink(0)
 				ui.Text(c, pinned[0].Text).FontSize(12).Muted().Ellipsis().Grow(1)
 			})
 		}
@@ -235,7 +267,7 @@ func (m *Model) conversationPane(c ui.C) {
 			})
 		}
 
-		// Message transcript (auto-follows bottom via ui.Scroll.Follow(true))
+		// Message transcript
 		msgs := m.Messages[activeChat.ID]
 		ui.Scroll(c).Grow(1).FillWidth().Pad(18).Gap(10).Follow(true).Scrollbars().Children(func() {
 			if win, ok := m.Windows[activeChat.ID]; ok && win.HasEarlier() {
@@ -252,14 +284,33 @@ func (m *Model) conversationPane(c ui.C) {
 			}
 		})
 
-		// Reply preview bar above composer
-		if m.ReplyTo != nil {
+		// Editing / Reply / Pending attachment bar above composer
+		if m.EditingMsgID > 0 {
 			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(10).Items(ui.Center).
 				Background(theme.Muted).Children(func() {
-				ui.Text(c, "Replying to "+m.ReplyTo.DisplaySender()+":").FontSize(12).Bold().Color(theme.Primary)
+				ui.Text(c, "Editing message").FontSize(12).Bold().Color(theme.Primary)
+				ui.Spacer(c)
+				if ui.Button(c, "Cancel edit").XSmall().Ghost().Clicked() {
+					m.EditingMsgID = 0
+					m.Draft = ""
+				}
+			})
+		} else if m.ReplyTo != nil {
+			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(10).Items(ui.Center).
+				Background(theme.Muted).Children(func() {
+				ui.Text(c, "Replying to "+m.ReplyTo.DisplaySender()+":").FontSize(12).Bold().Color(theme.Primary).Shrink(0)
 				ui.Text(c, m.ReplyTo.Text).FontSize(12).Muted().Ellipsis().Grow(1)
 				if ui.Button(c, "Cancel reply").XSmall().Ghost().Clicked() {
 					m.ReplyTo = nil
+				}
+			})
+		}
+		if m.PendingFile != "" {
+			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(10).Items(ui.Center).
+				Background(theme.Muted).Children(func() {
+				ui.Text(c, "Attachment: "+m.PendingFile).FontSize(12).Mono().Ellipsis().Grow(1)
+				if ui.Button(c, "Remove file").XSmall().Ghost().Clicked() {
+					m.PendingFile = ""
 				}
 			})
 		}
@@ -267,12 +318,24 @@ func (m *Model) conversationPane(c ui.C) {
 		// Compose bar
 		ui.Row(c).FillWidth().Pad(12).Gap(8).Items(ui.Center).
 			Background(theme.Card).Border(1, theme.Border).Children(func() {
+			if ui.Button(c, "Attach").Small().Outline().Clicked() {
+				if paths, err := app.OpenFiles(app.OpenFileOptions{Title: "Attach file"}); err == nil && len(paths) > 0 {
+					m.PendingFile = paths[0]
+				} else {
+					m.PendingFile = "release-notes.txt"
+				}
+			}
 			field := ui.TextField(c, &m.Draft, "Message", "Write a message...")
 			field.Grow(1)
 			if m.EnterToSend && field.Submitted() {
 				m.SendDraft()
 			}
-			if ui.Button(c, "Send").Disabled(strings.TrimSpace(m.Draft) == "").Clicked() {
+			sendLabel := "Send"
+			if m.EditingMsgID > 0 {
+				sendLabel = "Save"
+			}
+			canSend := strings.TrimSpace(m.Draft) != "" || m.PendingFile != ""
+			if ui.Button(c, sendLabel).Disabled(!canSend).Clicked() {
 				m.SendDraft()
 			}
 		})
@@ -291,7 +354,19 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 		return
 	}
 
-	// Compact IRC layout
+	if m.Selecting {
+		checked := m.SelectedMsgs[msg.ID]
+		ui.Row(c.KeyInt(msg.ID)).FillWidth().Gap(10).Items(ui.Center).Children(func() {
+			if ui.Checkbox(c, &checked, fmt.Sprintf("Select message %d", msg.ID)).Changed() {
+				m.SelectedMsgs[msg.ID] = checked
+			}
+			ui.Column(c).Grow(1).Children(func() {
+				ui.Text(c, msg.DisplaySender()+": "+msg.Text).FontSize(13.5).Ellipsis()
+			})
+		})
+		return
+	}
+
 	if m.Layout == LayoutCompact {
 		ui.Row(c.KeyInt(msg.ID)).FillWidth().Gap(8).Items(ui.Start).Children(func() {
 			ui.Text(c, msg.TimeLabel()).FontSize(11.5).Muted().Mono()
@@ -301,17 +376,19 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 		return
 	}
 
-	// Workspace row layout
 	if m.Layout == LayoutWorkspace {
 		ui.Row(c.KeyInt(msg.ID)).FillWidth().Pad(8).Gap(10).Radius(6).
 			Hover(ui.Look{}.Background(theme.Hover)).Children(func() {
-			ui.Row(c).Size(28, 28).Radius(6).Background(theme.Secondary).Center().Children(func() {
+			ui.Row(c).Size(28, 28).Radius(6).Shrink(0).Background(theme.Secondary).Center().Children(func() {
 				ui.Text(c, initialsFrom(msg.DisplaySender())).FontSize(11).Bold()
 			})
 			ui.Column(c).Grow(1).Gap(4).Children(func() {
 				ui.Row(c).Gap(8).Items(ui.Center).Children(func() {
 					ui.Text(c, msg.DisplaySender()).FontSize(13.5).Bold()
 					ui.Text(c, msg.TimeLabel()).FontSize(11.5).Muted()
+					if msg.IsEdited {
+						ui.Text(c, "(edited)").FontSize(11).Muted()
+					}
 					if status := msg.StatusLabel(); status != "" {
 						ui.Text(c, status).FontSize(11).Muted()
 					}
@@ -323,10 +400,12 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 		return
 	}
 
-	// Default Bubble layout using Viva's opt-in ui/message package
 	metaTime := msg.TimeLabel()
+	if msg.IsEdited {
+		metaTime += " · edited"
+	}
 	if status := msg.StatusLabel(); status != "" {
-		metaTime = metaTime + " · " + status
+		metaTime += " · " + status
 	}
 
 	row := message.New().
@@ -340,7 +419,7 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 		row = row.Start().Surface(ui.BubbleSecondary)
 	}
 
-	if msg.Quote != nil || msg.ViewType == "Webxdc" {
+	if msg.Quote != nil || msg.ViewType == "Webxdc" || msg.FileName != "" {
 		row = row.Content(func(cc ui.C) {
 			ui.Column(cc).Gap(6).Pad(10).Radius(10).MaxWidthPercent(75).
 				Background(bubbleBg(theme, msg.IsOutgoing)).Children(func() {
@@ -354,14 +433,22 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 				if msg.IsOutgoing {
 					fg = theme.PrimaryForeground
 				}
-				ui.Wrap(cc, msg.Text).FontSize(14).Color(fg)
+				if msg.Text != "" {
+					ui.Wrap(cc, msg.Text).FontSize(14).Color(fg)
+				}
 				if msg.ViewType == "Webxdc" {
 					ui.Row(cc).Gap(8).Items(ui.Center).Children(func() {
 						ui.Text(cc, "Webxdc: "+msg.FileName).FontSize(12).Bold().Color(fg)
 						if ui.Button(cc, "Open Webxdc").XSmall().Outline().Clicked() {
-							m.WebxdcTitle = msg.FileName
-							m.WebxdcInfo = "Offline sandboxed mini-app served via webxdc://app/ with connect-src 'none' CSP and Ephemeral WebView store."
-							m.WebxdcOpen = true
+							copied := msg
+							cc.After(func() { m.OpenWebxdcMessage(copied) })
+						}
+					})
+				} else if msg.FileName != "" {
+					ui.Row(cc).Gap(8).Pad(6).Radius(6).Background(theme.Card).Items(ui.Center).Children(func() {
+						ui.Text(cc, "File: "+msg.FileName).FontSize(12).Mono()
+						if msg.FileBytes > 0 {
+							ui.Textf(cc, "(%d KB)", max(msg.FileBytes/1024, 1)).FontSize(11).Muted()
 						}
 					})
 				}
@@ -379,7 +466,7 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 }
 
 func (m *Model) messageExtras(c ui.C, msg dc.Message) {
-	ui.Row(c).Gap(6).Items(ui.Center).Children(func() {
+	ui.Row(c).Gap(4).Items(ui.Center).Children(func() {
 		for _, rx := range msg.Reactions {
 			label := fmt.Sprintf("%s %d", rx.Emoji, rx.Count)
 			btn := ui.Button(c.Key("rx-"+rx.Emoji), label).XSmall()
@@ -399,6 +486,21 @@ func (m *Model) messageExtras(c ui.C, msg dc.Message) {
 		}
 		if ui.Button(c, "+1").XSmall().Ghost().Clicked() {
 			c.After(func() { m.ToggleReaction(msg.ChatID, msg.ID, "👍") })
+		}
+		pinLabel := "Pin"
+		if msg.IsPinned {
+			pinLabel = "Unpin"
+		}
+		if ui.Button(c, pinLabel).XSmall().Ghost().Clicked() {
+			c.After(func() { m.TogglePinMessage(msg.ChatID, msg.ID) })
+		}
+		if msg.IsOutgoing {
+			if ui.Button(c, "Edit").XSmall().Ghost().Clicked() {
+				c.After(func() {
+					m.EditingMsgID = msg.ID
+					m.Draft = msg.Text
+				})
+			}
 		}
 	})
 }
@@ -428,11 +530,118 @@ func (m *Model) quickSwitcherModal(c ui.C) {
 	}, nil)
 }
 
+func (m *Model) accountsModal(c ui.C) {
+	if !m.AccountsOpen {
+		return
+	}
+	ui.ModalWith(c, &m.AccountsOpen, "Switch Account", ui.ModalSpec{Width: 440}, func() {
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
+			for _, acct := range m.Accounts {
+				a := acct
+				label := a.DisplayName
+				if a.Addr != "" {
+					label += " (" + a.Addr + ")"
+				}
+				btn := ui.Button(c.KeyInt(a.ID), label).FillWidth()
+				if a.ID == m.ActiveAcctID {
+					btn = btn.Secondary()
+				} else {
+					btn = btn.Outline()
+				}
+				if btn.Clicked() {
+					id := a.ID
+					c.After(func() { m.SwitchAccount(id) })
+				}
+			}
+		})
+	}, func() {
+		if ui.Button(c, "Close").Outline().Clicked() {
+			m.AccountsOpen = false
+		}
+	})
+}
+
+func (m *Model) chatInfoModal(c ui.C) {
+	if !m.ChatInfoOpen {
+		return
+	}
+	chat := m.ActiveChat()
+	if chat == nil {
+		m.ChatInfoOpen = false
+		return
+	}
+	ui.ModalWith(c, &m.ChatInfoOpen, "Chat Info", ui.ModalSpec{Width: 440}, func() {
+		ui.Column(c).FillWidth().Gap(12).Children(func() {
+			ui.Text(c, chat.Name).FontSize(16).Bold()
+			ui.Textf(c, "Type: %s · Messages loaded: %d", chat.ChatType, len(m.Messages[chat.ID])).FontSize(13).Muted()
+			ui.Row(c).Gap(8).Children(func() {
+				pinBtn := "Pin Chat"
+				if chat.IsPinned {
+					pinBtn = "Unpin Chat"
+				}
+				if ui.Button(c, pinBtn).Small().Outline().Clicked() {
+					id := chat.ID
+					c.After(func() { m.TogglePinChat(id) })
+				}
+				muteBtn := "Mute Chat"
+				if chat.IsMuted {
+					muteBtn = "Unmute Chat"
+				}
+				if ui.Button(c, muteBtn).Small().Outline().Clicked() {
+					id := chat.ID
+					c.After(func() { m.ToggleMuteChat(id) })
+				}
+			})
+		})
+	}, func() {
+		if ui.Button(c, "Close").Clicked() {
+			m.ChatInfoOpen = false
+		}
+	})
+}
+
+func (m *Model) galleryModal(c ui.C) {
+	if !m.GalleryOpen {
+		return
+	}
+	ui.ModalWith(c, &m.GalleryOpen, "Media & Files Gallery", ui.ModalSpec{Width: 500}, func() {
+		ui.Column(c).FillWidth().Gap(12).Children(func() {
+			ui.Tabs(c, &m.GalleryTab, GalleryTabs, nil)
+			items := m.GalleryItems()
+			if len(items) == 0 {
+				ui.Text(c, "No shared media or files in this category.").FontSize(13).Muted()
+				return
+			}
+			for _, item := range items {
+				it := item
+				ui.Row(c.KeyInt(it.ID)).FillWidth().Pad(8).Gap(10).Radius(6).
+					Background(c.Theme().Muted).Items(ui.Center).Children(func() {
+					ui.Text(c, it.ViewType).FontSize(11.5).Bold().Color(c.Theme().Primary)
+					ui.Text(c, it.FileName).FontSize(13).Mono().Grow(1).Ellipsis()
+					if it.ViewType == "Webxdc" {
+						if ui.Button(c, "Launch").XSmall().Outline().Clicked() {
+							copied := it
+							c.After(func() {
+								m.GalleryOpen = false
+								m.OpenWebxdcMessage(copied)
+							})
+						}
+					}
+				})
+			}
+		})
+	}, func() {
+		if ui.Button(c, "Close").Clicked() {
+			m.GalleryOpen = false
+		}
+	})
+}
+
 func (m *Model) settingsModal(c ui.C) {
 	if !m.SettingsOpen {
 		return
 	}
-	ui.ModalWith(c, &m.SettingsOpen, "Parla Viva Settings", ui.ModalSpec{Width: 460}, func() {
+	ui.ModalWith(c, &m.SettingsOpen, "Parla Viva Settings", ui.ModalSpec{Width: 480}, func() {
 		ui.Column(c).FillWidth().Gap(14).Children(func() {
 			ui.Text(c, "Conversation layout").FontSize(13).Bold()
 			ui.Choice(c, &m.Layout, LayoutModes, func(v LayoutMode) string { return string(v) })
@@ -457,6 +666,21 @@ func (m *Model) settingsModal(c ui.C) {
 				ui.Spacer(c)
 				ui.Switch(c, &m.NotifyEnabled, "Desktop notifications")
 			})
+
+			ui.Divider(c)
+			ui.Text(c, "SafeStore Encrypted Backups (AES-256-GCM)").FontSize(13).Bold()
+			ui.TextField(c, &m.BackupPassword, "Backup password", "Enter strong password...").FillWidth().Secure()
+			ui.Row(c).Gap(8).Children(func() {
+				if ui.Button(c, "Create Backup").Small().Outline().Clicked() {
+					m.CreateEncryptedBackup()
+				}
+				if ui.Button(c, "Verify Backup").Small().Ghost().Disabled(m.LastBackupPath == "").Clicked() {
+					m.VerifyLastBackup()
+				}
+			})
+			if m.BackupStatus != "" {
+				ui.Wrap(c, m.BackupStatus).FontSize(12).Muted()
+			}
 		})
 	}, func() {
 		if ui.Button(c, "Done").Clicked() {
@@ -492,14 +716,22 @@ func (m *Model) webxdcDrawer(c ui.C) {
 	if title == "" {
 		title = "Webxdc App"
 	}
-	ui.Drawer(c, &m.WebxdcOpen, title, ui.DrawerSpec{Side: ui.DrawerRight, Size: 360}, func() {
-		ui.Column(c).FillWidth().Gap(12).Children(func() {
-			ui.Wrap(c, m.WebxdcInfo).FontSize(13.5).Muted()
-			ui.Text(c, "Scheme: webxdc://app/index.html").FontSize(12).Mono()
-			ui.Text(c, "Policy: Ephemeral=true, BridgeMainFrameOnly=true").FontSize(12).Mono()
+	ui.Drawer(c, &m.WebxdcOpen, title, ui.DrawerSpec{Side: ui.DrawerRight, Size: 380}, func() {
+		ui.Column(c).Fill().Gap(12).Children(func() {
+			if m.WebView != nil {
+				ui.Slot(c).Grow(1).FillWidth().NativeView(m.WebView.ID())
+			} else {
+				ui.Wrap(c, m.WebxdcInfo).FontSize(13.5).Muted()
+				ui.Text(c, "Scheme: webxdc://app/index.html").FontSize(12).Mono()
+				ui.Text(c, "Policy: Ephemeral=true, BridgeMainFrameOnly=true").FontSize(12).Mono()
+			}
 		})
 	}, func() {
 		if ui.Button(c, "Close").Outline().Clicked() {
+			if m.WebView != nil {
+				m.WebView.Close()
+				m.WebView = nil
+			}
 			m.WebxdcOpen = false
 		}
 	})
