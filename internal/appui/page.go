@@ -360,15 +360,19 @@ func (m *Model) conversationPane(c ui.C) {
 			lastDate := ""
 			for i := range msgs {
 				day := msgs[i].DateLabel()
-				if day != "" && day != lastDate {
+				newDay := day != "" && day != lastDate
+				if newDay {
 					lastDate = day
-					ui.Row(c.Key("day-"+day)).FillWidth().Justify(ui.Center).PadY(4).Children(func() {
-						ui.Row(c).PadX(10).PadY(2).Radius(10).Background(theme.Muted).Children(func() {
+					ui.Row(c.Key("day-"+day)).FillWidth().Justify(ui.Center).PadY(6).Children(func() {
+						ui.Row(c).PadX(12).PadY(3).Radius(12).Background(theme.Muted).Children(func() {
 							ui.Text(c, day).FontSize(11).Muted()
 						})
 					})
 				}
-				m.renderMessage(c, msgs[i])
+				grouped := !newDay && i > 0 && !msgs[i-1].IsInfo && !msgs[i].IsInfo &&
+					msgs[i].IsOutgoing == msgs[i-1].IsOutgoing &&
+					msgs[i].DisplaySender() == msgs[i-1].DisplaySender()
+				m.renderMessage(c, msgs[i], grouped)
 			}
 		})
 
@@ -430,56 +434,64 @@ func (m *Model) conversationPane(c ui.C) {
 			})
 		}
 
-		// Unified bottom composer bar with crisp GPU vector icons
-		ui.Row(c).FillWidth().PadX(12).PadY(10).Gap(8).Items(ui.Center).
-			Background(theme.Card).Border(1, theme.Border).Children(func() {
-			if iconBtn(c, "Attach file", IconPaperclip, true).Clicked() {
-				opts := app.OpenFileOptions{
-					Title:         "Select files to send",
-					AllowMultiple: true,
-				}
-				if paths, err := app.OpenFiles(opts); err == nil && len(paths) > 0 {
-					m.AddAttachments(paths)
-				} else if m.DemoMode {
-					m.AddAttachments([]string{"release-notes.md"})
-				}
-			}
-			if iconBtn(c, "Attach photos", IconImage, true).Clicked() {
-				opts := app.OpenFileOptions{
-					Title:         "Select images to send",
-					AllowMultiple: true,
-				}
-				if paths, err := app.OpenFiles(opts); err == nil && len(paths) > 0 {
-					m.AddAttachments(paths)
-				} else if m.DemoMode {
-					m.AddAttachments([]string{"photo-1.png", "photo-2.jpg"})
-				}
-			}
-			field := ui.TextField(c, &m.Draft, "Message", "Write a message or drop files...")
-			field.Grow(1).Radius(10)
-			if m.EnterToSend && field.Submitted() {
-				m.SendDraft()
-			}
-			sendLabel := "Send"
-			if m.EditingMsgID > 0 {
-				sendLabel = "Save"
-			} else if len(m.PendingFiles) > 1 {
-				sendLabel = fmt.Sprintf("Send (%d)", len(m.PendingFiles))
-			}
-			canSend := strings.TrimSpace(m.Draft) != "" || len(m.PendingFiles) > 0
-			sendBtn := ui.ButtonBase(c, sendLabel).Height(34).PadX(12).Radius(10).Gap(6).
-				Items(ui.Center).Justify(ui.Center).Background(theme.Primary).Disabled(!canSend).
-				Children(func() {
-					ui.Icon(c, IconSend).Size(15, 15).Color(theme.PrimaryForeground)
-					if m.EditingMsgID > 0 {
-						ui.Text(c, "Save").FontSize(12.5).Bold().Color(theme.PrimaryForeground)
-					} else if len(m.PendingFiles) > 1 {
-						ui.Textf(c, "%d", len(m.PendingFiles)).FontSize(12).Bold().Color(theme.PrimaryForeground)
+		// Sleek floating pill composer bar
+		ui.Row(c).FillWidth().PadX(16).PadY(10).Background(theme.Background).Children(func() {
+			ui.Row(c).FillWidth().PadX(10).PadY(6).Gap(6).Radius(18).Items(ui.Center).
+				Background(theme.Card).Border(1, theme.Border).Children(func() {
+				if iconBtn(c, "Attach file", IconPaperclip, true).Clicked() {
+					opts := app.OpenFileOptions{
+						Title:         "Select files to send",
+						AllowMultiple: true,
 					}
-				})
-			if sendBtn.Clicked() {
-				m.SendDraft()
-			}
+					if paths, err := app.OpenFiles(opts); err == nil && len(paths) > 0 {
+						m.AddAttachments(paths)
+					} else if m.DemoMode {
+						m.AddAttachments([]string{"release-notes.md"})
+					}
+				}
+				if iconBtn(c, "Attach photos", IconImage, true).Clicked() {
+					opts := app.OpenFileOptions{
+						Title:         "Select images to send",
+						AllowMultiple: true,
+					}
+					if paths, err := app.OpenFiles(opts); err == nil && len(paths) > 0 {
+						m.AddAttachments(paths)
+					} else if m.DemoMode {
+						m.AddAttachments([]string{"photo-1.png", "photo-2.jpg"})
+					}
+				}
+				field := ui.TextField(c, &m.Draft, "Message", "Message...")
+				field.Grow(1).Radius(12)
+				if m.EnterToSend && field.Submitted() {
+					m.SendDraft()
+				}
+				sendLabel := "Send"
+				if m.EditingMsgID > 0 {
+					sendLabel = "Save"
+				} else if len(m.PendingFiles) > 1 {
+					sendLabel = fmt.Sprintf("Send (%d)", len(m.PendingFiles))
+				}
+				canSend := strings.TrimSpace(m.Draft) != "" || len(m.PendingFiles) > 0
+				sendBg := theme.Primary
+				sendFg := theme.PrimaryForeground
+				if !canSend {
+					sendBg = theme.Secondary
+					sendFg = theme.MutedForeground
+				}
+				sendBtn := ui.ButtonBase(c, sendLabel).Height(34).MinWidth(34).PadX(10).Radius(17).Gap(5).
+					Items(ui.Center).Justify(ui.Center).Background(sendBg).Disabled(!canSend).
+					Children(func() {
+						ui.Icon(c, IconSend).Size(15, 15).Color(sendFg)
+						if m.EditingMsgID > 0 {
+							ui.Text(c, "Save").FontSize(12).Bold().Color(sendFg)
+						} else if len(m.PendingFiles) > 1 {
+							ui.Textf(c, "%d", len(m.PendingFiles)).FontSize(12).Bold().Color(sendFg)
+						}
+					})
+				if sendBtn.Clicked() {
+					m.SendDraft()
+				}
+			})
 		})
 	})
 }
@@ -529,7 +541,7 @@ func formatBytesShort(n int64) string {
 
 const historyDefaultStep = 30
 
-func (m *Model) renderMessage(c ui.C, msg dc.Message) {
+func (m *Model) renderMessage(c ui.C, msg dc.Message, grouped bool) {
 	theme := c.Theme()
 
 	if msg.IsInfo {
@@ -593,10 +605,10 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 		metaTime += " · " + status
 	}
 
-	row := message.New().
-		Name(msg.DisplaySender()).
-		Time(metaTime).
-		Avatar(initialsFrom(msg.DisplaySender()))
+	row := message.New().Time(metaTime)
+	if !grouped && !msg.IsOutgoing {
+		row = row.Name(msg.DisplaySender()).Avatar(initialsFrom(msg.DisplaySender()))
+	}
 
 	if msg.IsOutgoing {
 		row = row.End().Surface(ui.BubblePrimary)
@@ -607,12 +619,15 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 	bmp, hasBmp := m.MessageBitmap(msg)
 	if msg.Quote != nil || msg.ViewType == "Webxdc" || msg.FileName != "" || hasBmp {
 		row = row.Content(func(cc ui.C) {
-			ui.Column(cc).Gap(6).Pad(10).Radius(12).MaxWidthPercent(75).
+			ui.Column(cc).Gap(6).PadX(12).PadY(9).Radius(14).MaxWidthPercent(72).
 				Background(bubbleBg(theme, msg.IsOutgoing)).Children(func() {
 				if msg.Quote != nil {
-					ui.Column(cc).PadLeft(8).Border(1, theme.Border).Children(func() {
-						ui.Text(cc, msg.Quote.AuthorName).FontSize(11.5).Bold()
-						ui.Text(cc, msg.Quote.Text).FontSize(12).Muted().Ellipsis()
+					ui.Row(cc).Gap(8).Pad(6).Radius(8).Background(theme.Card).Items(ui.Center).Children(func() {
+						ui.Row(cc).Width(3).Height(28).Radius(2).Background(theme.Primary).Shrink(0)
+						ui.Column(cc).Grow(1).Gap(1).Children(func() {
+							ui.Text(cc, msg.Quote.AuthorName).FontSize(11.5).Bold().Color(theme.Primary)
+							ui.Text(cc, msg.Quote.Text).FontSize(12).Muted().Ellipsis()
+						})
 					})
 				}
 				if hasBmp {
