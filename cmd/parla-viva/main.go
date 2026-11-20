@@ -140,23 +140,36 @@ func main() {
 	})
 	winIcon, _ := iconpng.Decode(assets.AppIconPNG)
 	cfg := ui.Configure(page, app.Config{
-		Title:          "Parla Viva",
-		Icon:           winIcon,
-		Width:          1200,
-		Height:         780,
-		Web:            webHost,
-		Invalidator:    inv,
-		OnWake:         model.DrainUpdates,
-		OnFileDrop:     model.HandleFileDrop,
-		OnActivate:     model.WakeNetwork,
-		OnCloseRequest: func(allow func()) { allow() },
+		Title:       "Parla Viva",
+		Icon:        winIcon,
+		Width:       1200,
+		Height:      780,
+		Web:         webHost,
+		Invalidator: inv,
+		OnWake:      model.DrainUpdates,
+		OnFileDrop:  model.HandleFileDrop,
+		OnActivate:  model.WakeNetwork,
 		OnClosed: func() {
 			cleanup("window_closed")
 			os.Exit(0)
 		},
 	})
 
-	if err := app.RunCanvas(cfg, new(gfx.Canvas)); err != nil {
+	err := app.RunApplication(func(application *app.Application) error {
+		application.OnQuitRequest(func(allow func()) {
+			cleanup("quit_request")
+			allow()
+			os.Exit(0)
+		})
+		model.OnQuit = func() {
+			cleanup("quit_shortcut")
+			application.Quit()
+			os.Exit(0)
+		}
+		_, err := application.OpenWindow(cfg, new(gfx.Canvas))
+		return err
+	})
+	if err != nil {
 		log.Fatal(err)
 	}
 }
