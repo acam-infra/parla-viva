@@ -219,20 +219,42 @@ func mergeDeltaMessages(existing, delta []dc.Message) []dc.Message {
 	return out
 }
 
-// upsertChatEntry updates a single ChatEntry in-place (or prepends it) for O(1) delta sync.
-func upsertChatEntry(chats []dc.ChatEntry, updated dc.ChatEntry) []dc.ChatEntry {
-	out := make([]dc.ChatEntry, 0, len(chats)+1)
-	found := false
+// upsertChatEntry updates a single ChatEntry and optionally bubbles it to the top
+// (respecting pinned chats) so incoming messages surface immediately in the sidebar.
+func upsertChatEntry(chats []dc.ChatEntry, updated dc.ChatEntry, bubbleTop bool) []dc.ChatEntry {
+	rest := make([]dc.ChatEntry, 0, len(chats))
 	for _, ch := range chats {
-		if ch.ID == updated.ID {
-			out = append(out, updated)
-			found = true
-		} else {
-			out = append(out, ch)
+		if ch.ID != updated.ID {
+			rest = append(rest, ch)
 		}
 	}
-	if !found {
-		out = append([]dc.ChatEntry{updated}, out...)
+	if !bubbleTop {
+		// Preserve existing index if present.
+		out := make([]dc.ChatEntry, 0, len(chats)+1)
+		found := false
+		for _, ch := range chats {
+			if ch.ID == updated.ID {
+				out = append(out, updated)
+				found = true
+			} else {
+				out = append(out, ch)
+			}
+		}
+		if !found {
+			out = append([]dc.ChatEntry{updated}, out...)
+		}
+		return out
 	}
+	// Insert right after pinned chats (or at index 0 if updated itself is pinned).
+	insertAt := 0
+	if !updated.IsPinned {
+		for insertAt < len(rest) && rest[insertAt].IsPinned {
+			insertAt++
+		}
+	}
+	out := make([]dc.ChatEntry, 0, len(rest)+1)
+	out = append(out, rest[:insertAt]...)
+	out = append(out, updated)
+	out = append(out, rest[insertAt:]...)
 	return out
 }

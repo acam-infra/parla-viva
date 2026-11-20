@@ -21,7 +21,7 @@ import (
 )
 
 // Version is the current Parla Viva CLI & app version.
-const Version = "0.5.4"
+const Version = "0.6.0"
 
 // knownCommands lists top-level subcommands handled by the Agent CLI.
 var knownCommands = map[string]bool{

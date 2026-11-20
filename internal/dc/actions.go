@@ -183,3 +183,9 @@ func (c *Client) SetChatMuteDuration(ctx context.Context, accountID, chatID int,
 	_, err := c.caller.Call(ctx, "set_chat_mute_duration", []any{accountID, chatID, dur})
 	return err
 }
+
+// MaybeNetwork hints deltachat-rpc-server to immediately wake up IMAP IDLE & SMTP queues.
+func (c *Client) MaybeNetwork(ctx context.Context) error {
+	_, err := c.caller.Call(ctx, "maybe_network", []any{})
+	return err
+}

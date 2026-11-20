@@ -15,6 +15,7 @@ import (
 
 	"github.com/acam-infra/parla-viva/internal/dc"
 	"github.com/acam-infra/parla-viva/internal/history"
+	"github.com/acam-infra/parla-viva/internal/notify"
 	"github.com/acam-infra/parla-viva/internal/preview"
 )
 
@@ -45,6 +46,7 @@ type Model struct {
 	WebReady     bool
 	AccountsPath string
 	OnEvent      func(dc.Event)
+	Notifier     *notify.Notifier
 	DemoMode     bool
 	StatusText   string
 
@@ -262,6 +264,7 @@ func NewLiveModel(client *dc.Client, invalidator *app.Invalidator) *Model {
 	m.DemoMode = false
 	m.Client = client
 	m.Invalidator = invalidator
+	m.Notifier = notify.New()
 	m.StatusText = "Connected to deltachat-rpc-server"
 	return m
 }
@@ -721,7 +724,12 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 
 		if chosenID > 0 {
 			_ = m.Client.SelectAccount(ctx, chosenID)
-			// Fast path: load chatlist + first chat BEFORE slow StartIO & QR generation.
+			// Wake up IMAP IDLE & SMTP immediately in parallel at t=0 (never blocks first-paint hydration).
+			go func() {
+				_ = m.Client.StartIOForAllAccounts(ctx)
+				_ = m.Client.MaybeNetwork(ctx)
+			}()
+			// Fast path: load chatlist + first chat concurrently with network wake-up.
 			ids, _ := m.Client.GetChatlistEntries(ctx, chosenID, nil, "")
 			chats, _ = m.Client.GetChatlistItems(ctx, chosenID, ids)
 			if len(chats) > 0 {
@@ -747,10 +755,9 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 			model.saveCacheAsync()
 		})
 
-		// Non-blocking background startup: IO, SecureJoin QR, and top-5 chat prefetch (without marking unread seen).
+		// Non-blocking background startup: SecureJoin QR & top-5 chat prefetch (IO already started at t=0).
 		if chosenID > 0 {
 			go func(acctID int, chatList []dc.ChatEntry, skipChat int) {
-				_ = m.Client.StartIOForAllAccounts(ctx)
 				if qr, err := m.Client.GetChatSecurejoinQRCode(ctx, acctID, 0); err == nil && qr != "" {
 					m.EnqueueUpdate(func(model *Model) {
 						model.InviteLink = qr
@@ -771,9 +778,14 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 			}(chosenID, chats, initialChatID)
 		}
 
+		// Decoupled async coalescing sync worker: GetNextEvent NEVER blocks on RPC calls!
+		eventCh := make(chan dc.Event, 256)
+		go m.runDeltaSyncWorker(ctx, eventCh)
+
 		for {
 			ev, err := m.Client.GetNextEvent(ctx)
 			if err != nil {
+				close(eventCh)
 				return
 			}
 			if m.OnEvent != nil {
@@ -781,41 +793,162 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 			}
 			switch ev.Event.Kind {
 			case "IncomingMsg", "MsgsChanged", "MsgDelivered", "MsgRead", "ReactionsChanged":
-				activeAcct := m.currentAccountID()
-				if activeAcct <= 0 || ev.ContextID != activeAcct {
-					continue
-				}
-				// O(1) incremental delta sync when a specific message ID changed
-				if ev.Event.MsgID > 0 && ev.Event.ChatID > 0 {
-					deltaMsgs, merr := m.Client.GetMessages(ctx, activeAcct, []int{ev.Event.MsgID})
-					deltaChats, cerr := m.Client.GetChatlistItems(ctx, activeAcct, []int{ev.Event.ChatID})
-					if merr == nil || cerr == nil {
-						m.EnqueueUpdate(func(model *Model) {
-							if len(deltaChats) > 0 {
-								model.Chats = upsertChatEntry(model.Chats, deltaChats[0])
-							}
-							if len(deltaMsgs) > 0 {
-								model.Messages[ev.Event.ChatID] = mergeDeltaMessages(model.Messages[ev.Event.ChatID], deltaMsgs)
-							}
-							model.saveCacheAsync()
-						})
-						continue
-					}
-				}
-				chatIDs, err := m.Client.GetChatlistEntries(ctx, activeAcct, nil, "")
-				if err == nil {
-					updatedChats, _ := m.Client.GetChatlistItems(ctx, activeAcct, chatIDs)
-					m.EnqueueUpdate(func(model *Model) {
-						model.Chats = updatedChats
-						model.saveCacheAsync()
-						if ev.Event.ChatID == model.ActiveChatID && ev.Event.ChatID > 0 {
-							go model.loadChatMessagesAsync(activeAcct, ev.Event.ChatID)
-						}
-					})
+				select {
+				case eventCh <- ev:
+				default:
 				}
 			}
 		}
 	}()
+}
+
+
+// runDeltaSyncWorker drains queued core events asynchronously, coalescing rapid bursts
+// within 35ms while dispatching IncomingMsg immediately for sub-second sync & notifications.
+func (m *Model) runDeltaSyncWorker(ctx context.Context, eventCh <-chan dc.Event) {
+	type chatBatch struct {
+		acctID      int
+		chatID      int
+		msgIDs      map[int]bool
+		hasIncoming bool
+		fullReload  bool
+	}
+	pending := make(map[int]*chatBatch)
+	var timer *time.Timer
+	var timerC <-chan time.Time
+
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		batches := pending
+		pending = make(map[int]*chatBatch)
+		for _, b := range batches {
+			batch := b
+			go m.applyCoalescedBatch(ctx, batch.acctID, batch.chatID, batch.msgIDs, batch.hasIncoming, batch.fullReload)
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timerC:
+			timerC = nil
+			flush()
+		case ev, ok := <-eventCh:
+			if !ok {
+				flush()
+				return
+			}
+			activeAcct := m.currentAccountID()
+			if activeAcct <= 0 || ev.ContextID != activeAcct {
+				continue
+			}
+			// Priority fast-path: IncomingMsg fires immediately without waiting for debounce window!
+			if ev.Event.Kind == "IncomingMsg" && ev.Event.MsgID > 0 && ev.Event.ChatID > 0 {
+				go m.applyCoalescedBatch(ctx, activeAcct, ev.Event.ChatID, map[int]bool{ev.Event.MsgID: true}, true, false)
+				continue
+			}
+			b, exists := pending[ev.Event.ChatID]
+			if !exists {
+				b = &chatBatch{acctID: activeAcct, chatID: ev.Event.ChatID, msgIDs: make(map[int]bool)}
+				pending[ev.Event.ChatID] = b
+			}
+			if ev.Event.MsgID > 0 {
+				b.msgIDs[ev.Event.MsgID] = true
+			} else {
+				b.fullReload = true
+			}
+			if timerC == nil {
+				if timer == nil {
+					timer = time.NewTimer(35 * time.Millisecond)
+				} else {
+					timer.Reset(35 * time.Millisecond)
+				}
+				timerC = timer.C
+			}
+		}
+	}
+}
+
+func (m *Model) applyCoalescedBatch(ctx context.Context, acctID, chatID int, msgIDSet map[int]bool, isIncoming, fullReload bool) {
+	if acctID <= 0 || m.Client == nil {
+		return
+	}
+	if chatID <= 0 || fullReload {
+		chatIDs, err := m.Client.GetChatlistEntries(ctx, acctID, nil, "")
+		if err == nil {
+			updatedChats, _ := m.Client.GetChatlistItems(ctx, acctID, chatIDs)
+			m.EnqueueUpdate(func(model *Model) {
+				model.Chats = updatedChats
+				model.saveCacheAsync()
+				if chatID > 0 && chatID == model.ActiveChatID {
+					go model.deltaSyncChatAsync(acctID, chatID, true)
+				}
+			})
+		}
+		return
+	}
+
+	msgIDs := make([]int, 0, len(msgIDSet))
+	for id := range msgIDSet {
+		msgIDs = append(msgIDs, id)
+	}
+
+	// Parallel RPC fetch: messages and chat summary concurrently!
+	var deltaMsgs []dc.Message
+	var deltaChats []dc.ChatEntry
+	var wg sync.WaitGroup
+	if len(msgIDs) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			deltaMsgs, _ = m.Client.GetMessages(ctx, acctID, msgIDs)
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		deltaChats, _ = m.Client.GetChatlistItems(ctx, acctID, []int{chatID})
+	}()
+	wg.Wait()
+
+	m.EnqueueUpdate(func(model *Model) {
+		if model.ActiveAcctID != acctID {
+			return
+		}
+		var chatEntry *dc.ChatEntry
+		if len(deltaChats) > 0 {
+			c := deltaChats[0]
+			chatEntry = &c
+			model.Chats = upsertChatEntry(model.Chats, c, isIncoming)
+		}
+		if len(deltaMsgs) > 0 {
+			model.Messages[chatID] = mergeDeltaMessages(model.Messages[chatID], deltaMsgs)
+			if isIncoming {
+				latest := deltaMsgs[len(deltaMsgs)-1]
+				isMuted := chatEntry != nil && chatEntry.IsMuted
+				if !latest.IsOutgoing && !latest.IsInfo && !isMuted {
+					title := latest.DisplaySender()
+					if chatEntry != nil && chatEntry.Name != "" && chatEntry.Kind == dc.ChatGroup {
+						title = chatEntry.Name + " · " + title
+					}
+					body := latest.Text
+					if body == "" && latest.FileName != "" {
+						body = "Sent file: " + latest.FileName
+					}
+					if chatID != model.ActiveChatID {
+						model.Toaster.Show(title, body, ui.ToastInfo)
+					}
+					if model.Notifier != nil {
+						model.Notifier.Push(notify.Item{ChatID: chatID, Title: title, Body: body})
+					}
+				}
+			}
+		}
+		model.saveCacheAsync()
+	})
 }
 
 // MessageBitmap returns a cached gfx.Bitmap for an image message, decoding lazily if needed.
