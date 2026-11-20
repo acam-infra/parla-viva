@@ -1,0 +1,17 @@
+[app]
+name = "Parla Viva"
+id = "io.github.fumayulaa.parla-viva"
+package = "./cmd/parla-viva"
+
+[mac]
+min_system = "12.0"
+
+[[app.file_types]]
+name = "Webxdc Mini-App"
+extensions = ["xdc"]
+mime = "application/webxdc+zip"
+
+[[app.file_types]]
+name = "vCard Contact"
+extensions = ["vcf"]
+mime = "text/vcard"
