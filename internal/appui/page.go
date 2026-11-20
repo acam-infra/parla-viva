@@ -84,13 +84,19 @@ func (m *Model) Page(c ui.C) {
 
 func (m *Model) sidebarPane(c ui.C) {
 	theme := c.Theme()
-	ui.Column(c).Width(m.Split.Pos).FillHeight().Pad(12).Gap(10).
+	sidebarW := m.Split.Pos
+	if sidebarW < 260 {
+		sidebarW = 300
+	} else if sidebarW > 420 {
+		sidebarW = 420
+	}
+	ui.Column(c).Width(sidebarW).MinWidth(260).MaxWidth(420).Shrink(0).FillHeight().Clip().Pad(12).Gap(10).
 		Background(theme.Card).Children(func() {
-		// Unified clean sidebar header: Title + Actions menu + Settings
-		ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
+		// Unified pinned sidebar header: Title + Actions menu + Settings
+		ui.Row(c).FillWidth().Shrink(0).Gap(6).Items(ui.Center).Children(func() {
 			ui.Text(c, "Parla Viva").FontSize(15.5).Bold().Shrink(0)
 			ui.Spacer(c)
-			newBtn := ui.Button(c, "+").XSmall().Outline()
+			newBtn := iconBtn(c, "New", IconPlus, true)
 			if newBtn.Clicked() {
 				m.NewMenuOpen = !m.NewMenuOpen
 			}
@@ -115,7 +121,7 @@ func (m *Model) sidebarPane(c ui.C) {
 		ui.Choice(c, &m.SidebarFilter, ChatFilters, nil)
 
 		chats := m.FilteredChats()
-		ui.Scroll(c).Grow(1).Gap(2).Scrollbars().Children(func() {
+		ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Gap(2).Scrollbars().Children(func() {
 			if len(chats) == 0 {
 				ui.Column(c).FillWidth().PadY(24).Gap(8).Items(ui.Center).Children(func() {
 					ui.Text(c, "No conversations").FontSize(13).Muted()
@@ -153,7 +159,7 @@ func (m *Model) sidebarPane(c ui.C) {
 						}
 					})
 
-					ui.Column(c).Grow(1).Gap(2).Children(func() {
+					ui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
 						ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
 							title := chat.Name
 							if chat.IsPinned {
@@ -210,7 +216,7 @@ func (m *Model) sidebarPane(c ui.C) {
 		})
 
 		ui.Divider(c)
-		ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Shrink(0).Gap(6).Items(ui.Center).Children(func() {
 			acctLabel := "Setup account"
 			if acct := m.ActiveAccount(); acct != nil {
 				acctLabel = acct.DisplayName
@@ -234,7 +240,7 @@ func (m *Model) conversationPane(c ui.C) {
 	theme := c.Theme()
 	activeChat := m.ActiveChat()
 
-	ui.Column(c).Grow(1).FillHeight().Children(func() {
+	ui.Column(c).Grow(1).MinWidth(0).FillHeight().Clip().Children(func() {
 		if activeChat == nil {
 			ui.Column(c).Fill().Center().Gap(10).Children(func() {
 				ui.Text(c, "Select a conversation").FontSize(18).Bold()
@@ -347,7 +353,7 @@ func (m *Model) conversationPane(c ui.C) {
 
 		// Message transcript with Telegram-style date dividers
 		msgs := m.Messages[activeChat.ID]
-		ui.Scroll(c).Grow(1).FillWidth().Pad(16).Gap(8).Follow(true).Scrollbars().Children(func() {
+		ui.Scroll(c).Grow(1).FillWidth().MinHeight(0).Pad(16).Gap(8).Follow(true).Scrollbars().Children(func() {
 			if win, ok := m.Windows[activeChat.ID]; ok && win.HasEarlier() {
 				ui.Row(c).FillWidth().Justify(ui.Center).Children(func() {
 					if ui.Button(c, "Load earlier messages").XSmall().Outline().Clicked() {

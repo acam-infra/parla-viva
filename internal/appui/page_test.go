@@ -8,6 +8,7 @@ import (
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 
+	"github.com/acam-infra/parla-viva/internal/dc"
 	"github.com/acam-infra/parla-viva/internal/preview"
 )
 
@@ -162,4 +163,63 @@ func TestAccountsSettingsBackupAndGallery(t *testing.T) {
 		t.Fatalf("expected >= 3 gallery items, got %d", len(m.GalleryItems()))
 	}
 	clickControl(t, driver, "Close")
+}
+
+func TestDynamicSidebarPinnedAndInteractiveFlows(t *testing.T) {
+	m := NewDemoModel()
+	// Stress test with 25 chats and ultra-long titles/URLs to ensure sidebar stays strictly pinned.
+	for i := 0; i < 20; i++ {
+		m.Chats = append(m.Chats, dc.ChatEntry{
+			ID:          100 + i,
+			Name:        "Long-Conversation-Title-Stress-Test-For-Fixed-Sidebar-Width",
+			LastMessage: "https://very-long-url-that-must-not-stretch-the-left-sidebar-pane.example.com/a/b/c/d/e/f",
+			ChatType:    "Group",
+		})
+	}
+	driver, inv := openDriver(t, m)
+
+	assertSidebarPinned := func(step string) {
+		t.Helper()
+		settings := findControl(t, driver, "Settings").Bounds
+		accounts := findControl(t, driver, "Accounts").Bounds
+		if settings.X+settings.Width > 340 {
+			t.Fatalf("[%s] sidebar Settings drifted right: %+v", step, settings)
+		}
+		if accounts.X+accounts.Width > 340 {
+			t.Fatalf("[%s] sidebar Accounts drifted right: %+v", step, accounts)
+		}
+		if accounts.Y < 700 || accounts.Y+accounts.Height > 780 {
+			t.Fatalf("[%s] sidebar Accounts not pinned at bottom of 780px window: %+v", step, accounts)
+		}
+	}
+
+	assertSidebarPinned("initial")
+
+	// Dynamic flow: switch chat -> toggle dark mode -> open/close search -> send long message -> stage & remove files
+	clickControl(t, driver, "Elena (Chatmail)")
+	assertSidebarPinned("after-chat-switch")
+
+	clickControl(t, driver, "Dark")
+	if !m.DarkMode {
+		t.Fatal("expected DarkMode = true")
+	}
+	assertSidebarPinned("after-dark-mode")
+
+	clickControl(t, driver, "Find")
+	if !m.SearchOpen {
+		t.Fatal("expected SearchOpen = true")
+	}
+	clickControl(t, driver, "Close")
+	assertSidebarPinned("after-search-toggle")
+
+	m.Draft = strings.Repeat("Long message line without breaking sidebar width. ", 8)
+	m.AddAttachments([]string{"report.csv", "diagram.png"})
+	inv.Invalidate()
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	assertSidebarPinned("after-staging-attachments")
+
+	clickControl(t, driver, "Send (2)")
+	assertSidebarPinned("after-sending-multi-attachments")
 }

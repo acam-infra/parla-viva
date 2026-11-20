@@ -51,7 +51,7 @@ jobs:
             go run ./cmd/parla-winres -exe "stage/${BIN}" -ico assets/icon.ico -version "$VER"
             cp assets/icon.ico stage/
           fi
-          cp README.md LICENSE viva.toml stage/
+          cp README.md LICENSE viva.toml assets/icon.png stage/
           if [ "${{ matrix.archive }}" = "zip" ]; then
             (cd stage && 7z a "../dist/parla-viva-${{ matrix.name }}.zip" .)
           else
