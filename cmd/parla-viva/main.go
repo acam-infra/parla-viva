@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 
@@ -21,6 +22,12 @@ import (
 	"github.com/acam-infra/parla-viva/internal/assets"
 	"github.com/acam-infra/parla-viva/internal/dc"
 )
+
+func init() {
+	// Pin main goroutine to OS thread 0 before any I/O so macOS AppKit/Metal
+	// always runs on the Cocoa main thread and never deadlocks on dispatch_sync.
+	runtime.LockOSThread()
+}
 
 func main() {
 	if agentcli.ShouldHandle(os.Args[1:]) {
