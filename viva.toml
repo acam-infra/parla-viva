@@ -1,6 +1,6 @@
 [app]
 name = "Parla Viva"
-id = "io.github.fumayulaa.parla-viva"
+id = "io.github.acam-infra.parla-viva"
 package = "./cmd/parla-viva"
 
 [mac]

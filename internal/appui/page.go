@@ -8,7 +8,7 @@ import (
 	"github.com/vivaui/viva/ui"
 	"github.com/vivaui/viva/ui/message"
 
-	"github.com/fumayulaa/parla-viva/internal/dc"
+	"github.com/acam-infra/parla-viva/internal/dc"
 )
 
 // Page renders the complete Parla Viva desktop window using Viva's declarative ui.C API.

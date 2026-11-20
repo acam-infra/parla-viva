@@ -1,4 +1,4 @@
-module github.com/fumayulaa/parla-viva
+module github.com/acam-infra/parla-viva
 
 go 1.26.0
 

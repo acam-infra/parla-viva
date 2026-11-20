@@ -11,8 +11,8 @@ import (
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 
-	"github.com/fumayulaa/parla-viva/internal/dc"
-	"github.com/fumayulaa/parla-viva/internal/history"
+	"github.com/acam-infra/parla-viva/internal/dc"
+	"github.com/acam-infra/parla-viva/internal/history"
 )
 
 // LayoutMode selects one of Parla's three conversation layouts.
