@@ -3,6 +3,9 @@ package appui
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -685,7 +688,7 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 	if m.Client == nil {
 		return
 	}
-	go func() {
+	safeGo("live_sync", func() {
 		accounts, err := m.Client.GetAllAccounts(ctx)
 		if err != nil {
 			m.EnqueueUpdate(func(model *Model) {
@@ -780,7 +783,7 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 
 		// Decoupled async coalescing sync worker: GetNextEvent NEVER blocks on RPC calls!
 		eventCh := make(chan dc.Event, 256)
-		go m.runDeltaSyncWorker(ctx, eventCh)
+		safeGo("delta_worker", func() { m.runDeltaSyncWorker(ctx, eventCh) })
 
 		for {
 			ev, err := m.Client.GetNextEvent(ctx)
@@ -799,7 +802,7 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 				}
 			}
 		}
-	}()
+	})
 }
 
 
@@ -825,7 +828,7 @@ func (m *Model) runDeltaSyncWorker(ctx context.Context, eventCh <-chan dc.Event)
 		pending = make(map[int]*chatBatch)
 		for _, b := range batches {
 			batch := b
-			go m.applyCoalescedBatch(ctx, batch.acctID, batch.chatID, batch.msgIDs, batch.hasIncoming, batch.fullReload)
+			safeGo("delta_batch", func() { m.applyCoalescedBatch(ctx, batch.acctID, batch.chatID, batch.msgIDs, batch.hasIncoming, batch.fullReload) })
 		}
 	}
 
@@ -969,13 +972,74 @@ func (m *Model) MessageBitmap(msg dc.Message) (gfx.Bitmap, bool) {
 	return gfx.Bitmap{}, false
 }
 
-// AddAttachments queues one or more files/images for multi-attachment upload.
-func (m *Model) AddAttachments(paths []string) {
-	for i, p := range paths {
-		p = strings.TrimSpace(p)
+func safeGo(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("goroutine_panic_recovered", "worker", name, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+			}
+		}()
+		fn()
+	}()
+}
+
+// Shutdown flushes cached state and closes background helpers cleanly on exit/signal.
+func (m *Model) Shutdown() {
+	if m == nil {
+		return
+	}
+	_ = m.SaveCache()
+	if m.Notifier != nil {
+		m.Notifier.Close()
+	}
+}
+
+// expandDroppedPaths resolves dropped files and top-level non-hidden files inside dropped folders.
+func expandDroppedPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, raw := range paths {
+		p := strings.TrimSpace(raw)
 		if p == "" {
 			continue
 		}
+		info, err := os.Stat(p)
+		if err != nil {
+			// Allow virtual demo paths when not on disk
+			out = append(out, p)
+			continue
+		}
+		if !info.IsDir() {
+			out = append(out, p)
+			continue
+		}
+		entries, err := os.ReadDir(p)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			out = append(out, filepath.Join(p, e.Name()))
+		}
+	}
+	return out
+}
+
+// AddAttachments queues one or more files/images for multi-attachment upload,
+// deduplicating already-staged paths and expanding dropped folders.
+func (m *Model) AddAttachments(paths []string) int {
+	expanded := expandDroppedPaths(paths)
+	existing := make(map[string]bool, len(m.PendingFiles))
+	for _, pf := range m.PendingFiles {
+		existing[pf.Path] = true
+	}
+	added := 0
+	for i, p := range expanded {
+		if p == "" || existing[p] {
+			continue
+		}
+		existing[p] = true
 		name := filepath.Base(p)
 		isImg := IsImagePath(p)
 		var bmp gfx.Bitmap
@@ -992,7 +1056,9 @@ func (m *Model) AddAttachments(paths []string) {
 			IsImage: isImg,
 			Bitmap:  bmp,
 		})
+		added++
 	}
+	return added
 }
 
 // RemoveAttachment removes one queued attachment by index.
@@ -1014,13 +1080,106 @@ func (m *Model) HandleFileDrop(ev gfx.FileDropEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true, Repaint: true}
 	case gfx.FileDropDrop:
 		m.DragOver = false
+		if m.ActiveChatID == 0 && len(m.Chats) > 0 {
+			m.SelectChat(m.Chats[0].ID)
+		}
 		if len(ev.Paths) > 0 {
-			m.AddAttachments(ev.Paths)
-			m.Toaster.Show("Files attached", fmt.Sprintf("%d item(s) ready to send", len(ev.Paths)), ui.ToastInfo)
+			added := m.AddAttachments(ev.Paths)
+			if added > 0 {
+				m.Toaster.Show("Files attached", fmt.Sprintf("%d item(s) ready to send", added), ui.ToastInfo)
+			}
 		}
 		return gfx.EventResult{Handled: true, Repaint: true}
 	}
 	return gfx.EventResult{}
+}
+
+// HandleSmartPaste pastes copied files (Finder/Explorer) or screenshots/images from the OS clipboard.
+// Returns true if files or an image were handled; returns false for plain text so TextField handles it.
+func (m *Model) HandleSmartPaste() bool {
+	if files, err := app.ClipboardFiles(); err == nil && len(files) > 0 {
+		if m.ActiveChatID == 0 && len(m.Chats) > 0 {
+			m.SelectChat(m.Chats[0].ID)
+		}
+		if added := m.AddAttachments(files); added > 0 {
+			m.Toaster.Show("Pasted files", fmt.Sprintf("%d file(s) attached from clipboard", added), ui.ToastInfo)
+		}
+		return true
+	}
+	if app.HasClipboardImage() {
+		if pngBytes, err := app.ClipboardImagePNG(); err == nil && len(pngBytes) > 0 {
+			dir := filepath.Join(os.TempDir(), "parla-viva-paste")
+			if m.AccountsPath != "" {
+				dir = filepath.Join(m.AccountsPath, "paste")
+			}
+			_ = os.MkdirAll(dir, 0o700)
+			outPath := filepath.Join(dir, fmt.Sprintf("clipboard-%s.png", time.Now().Format("20060102-150405")))
+			if err := os.WriteFile(outPath, pngBytes, 0o600); err == nil {
+				if m.ActiveChatID == 0 && len(m.Chats) > 0 {
+					m.SelectChat(m.Chats[0].ID)
+				}
+				m.AddAttachments([]string{outPath})
+				m.Toaster.Show("Pasted image", filepath.Base(outPath), ui.ToastInfo)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HandleEscape dismisses the topmost modal, search bar, or active reply/edit/select mode.
+func (m *Model) HandleEscape() bool {
+	switch {
+	case m.PreviewOpen:
+		m.PreviewOpen = false
+	case m.WebxdcOpen:
+		m.WebxdcOpen = false
+	case m.QuickOpen:
+		m.QuickOpen = false
+	case m.InviteOpen:
+		m.InviteOpen = false
+	case m.SettingsOpen:
+		m.SettingsOpen = false
+	case m.ChatInfoOpen:
+		m.ChatInfoOpen = false
+	case m.GalleryOpen:
+		m.GalleryOpen = false
+	case m.AccountsOpen:
+		m.AccountsOpen = false
+	case m.NewChatOpen:
+		m.NewChatOpen = false
+	case m.SearchOpen:
+		m.SearchOpen = false
+		m.SearchQuery = ""
+	case m.EditingMsgID > 0:
+		m.EditingMsgID = 0
+		m.Draft = ""
+	case m.ReplyTo != nil:
+		m.ReplyTo = nil
+	case m.Selecting:
+		m.Selecting = false
+		m.SelectedMsgs = make(map[int]bool)
+	default:
+		return false
+	}
+	return true
+}
+
+// SelectRelativeChat moves to the previous (-1) or next (+1) chat in the filtered sidebar list.
+func (m *Model) SelectRelativeChat(delta int) {
+	chats := m.FilteredChats()
+	if len(chats) == 0 {
+		return
+	}
+	idx := 0
+	for i, ch := range chats {
+		if ch.ID == m.ActiveChatID {
+			idx = i
+			break
+		}
+	}
+	next := (idx + delta + len(chats)) % len(chats)
+	m.SelectChat(chats[next].ID)
 }
 
 // OpenPreviewForMessage opens the universal in-app preview modal for images, Markdown, JSON, CSV, code, ZIP, vCard, or binary files.

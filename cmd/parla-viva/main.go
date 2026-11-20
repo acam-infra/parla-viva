@@ -5,6 +5,8 @@ import (
 	"flag"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/app/iconpng"
@@ -42,8 +44,8 @@ func main() {
 		logger.Info("startup", "version", agentcli.Version, "accountsDir", *accountsPath, "config", cfgPath, "logLevel", appCfg.LogLevel)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 
 	effRPC := *rpcPath
 	if effRPC == "" {
@@ -97,12 +99,28 @@ func main() {
 	webHost.OnReady = func() {
 		model.WebReady = true
 	}
-	if ipcSrv != nil {
-		defer ipcSrv.Close()
+	cleanup := func(reason string) {
+		if logger != nil {
+			logger.Info("shutdown", "reason", reason)
+		}
+		if model != nil {
+			model.Shutdown()
+		}
+		if ipcSrv != nil {
+			_ = ipcSrv.Close()
+		}
+		if transport != nil {
+			_ = transport.Close()
+		}
 	}
-	if transport != nil {
-		defer transport.Close()
-	}
+	defer cleanup("exit")
+
+	// React cleanly to SIGINT / SIGTERM: flush cache, remove IPC descriptor, close RPC server, and exit 0.
+	go func() {
+		<-ctx.Done()
+		cleanup("signal")
+		os.Exit(0)
+	}()
 
 	page := ui.NewPage(ui.PageConfig{
 		View:  model.Page,

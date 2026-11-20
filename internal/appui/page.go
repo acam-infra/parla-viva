@@ -38,6 +38,21 @@ func (m *Model) Page(c ui.C) {
 	if ui.Shortcut(c, ui.Primary, ",") {
 		m.SettingsOpen = !m.SettingsOpen
 	}
+	if ui.Shortcut(c, 0, "escape") {
+		m.HandleEscape()
+	}
+	if ui.Shortcut(c, ui.Primary, "v") {
+		m.HandleSmartPaste()
+	}
+	if ui.Shortcut(c, ui.Alt, "up") {
+		m.SelectRelativeChat(-1)
+	}
+	if ui.Shortcut(c, ui.Alt, "down") {
+		m.SelectRelativeChat(1)
+	}
+	if ui.Shortcut(c, ui.Primary, "enter") {
+		m.SendDraft()
+	}
 
 	ui.Stack(c).Fill().Children(func() {
 		ui.Column(c).Fill().Background(theme.Background).Children(func() {
@@ -707,6 +722,14 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message, grouped bool) {
 
 	box := message.View(c.KeyInt(msg.ID), msg.DisplaySender(), row)
 	ui.ContextMenu(c, box, func(menu *ui.MenuItems) {
+		if msg.Text != "" && menu.Item("Copy Text").Clicked() {
+			_ = app.SetClipboardText(msg.Text)
+			m.Toaster.Show("Copied", "Message text copied to clipboard", ui.ToastInfo)
+		}
+		if msg.FilePath != "" && menu.Item("Copy File").Clicked() {
+			_ = app.SetClipboardFiles([]string{msg.FilePath})
+			m.Toaster.Show("Copied", msg.FileName+" copied to clipboard", ui.ToastInfo)
+		}
 		if menu.Item("Reply").Clicked() {
 			copied := msg
 			c.After(func() { m.ReplyTo = &copied })

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var (
@@ -320,7 +321,14 @@ func (t *Transport) Close() error {
 		_ = stdout.Close()
 	}
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Wait()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			_ = cmd.Process.Kill()
+			<-done
+		}
 	}
 	return nil
 }

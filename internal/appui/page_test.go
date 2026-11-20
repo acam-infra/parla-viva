@@ -1,6 +1,8 @@
 package appui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -222,4 +224,51 @@ func TestDynamicSidebarPinnedAndInteractiveFlows(t *testing.T) {
 
 	clickControl(t, driver, "Send (2)")
 	assertSidebarPinned("after-sending-multi-attachments")
+}
+
+func TestDragDropDedupEscapeAndPanicRecovery(t *testing.T) {
+	m := NewDemoModel()
+	tmp := t.TempDir()
+	f1 := filepath.Join(tmp, "note.md")
+	f2 := filepath.Join(tmp, ".hidden")
+	_ = os.WriteFile(f1, []byte("# hi"), 0o600)
+	_ = os.WriteFile(f2, []byte("skip"), 0o600)
+
+	// Drop folder -> expands non-hidden files; dropping same file again deduplicates
+	m.HandleFileDrop(gfx.FileDropEvent{Phase: gfx.FileDropOver})
+	if !m.DragOver {
+		t.Fatal("expected DragOver = true on FileDropOver")
+	}
+	m.HandleFileDrop(gfx.FileDropEvent{Phase: gfx.FileDropDrop, Paths: []string{tmp, f1}})
+	if m.DragOver {
+		t.Fatal("expected DragOver = false after drop")
+	}
+	if len(m.PendingFiles) != 1 || m.PendingFiles[0].Name != "note.md" {
+		t.Fatalf("expected 1 deduplicated non-hidden file, got %+v", m.PendingFiles)
+	}
+
+	// Hierarchical Escape dismissal
+	m.SettingsOpen = true
+	m.SearchOpen = true
+	if !m.HandleEscape() || m.SettingsOpen {
+		t.Fatal("first Escape should close SettingsOpen")
+	}
+	if !m.HandleEscape() || m.SearchOpen {
+		t.Fatal("second Escape should close SearchOpen")
+	}
+
+	// Relative chat navigation
+	first := m.ActiveChatID
+	m.SelectRelativeChat(1)
+	if m.ActiveChatID == first {
+		t.Fatal("expected SelectRelativeChat(1) to switch chat")
+	}
+
+	// safeGo recovers panics cleanly without crashing process
+	done := make(chan struct{})
+	safeGo("test_panic", func() {
+		defer close(done)
+		panic("simulated crash")
+	})
+	<-done
 }
