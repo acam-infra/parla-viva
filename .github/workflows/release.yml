@@ -45,6 +45,12 @@ jobs:
           mkdir -p dist stage
           BIN="parla-viva${{ matrix.ext }}"
           go build -trimpath -ldflags="-s -w" -o "stage/${BIN}" ./cmd/parla-viva
+          if [ "${{ matrix.ext }}" = ".exe" ]; then
+            VER="${GITHUB_REF_NAME#v}"
+            [ -z "$VER" ] && VER="0.5.0"
+            go run ./cmd/parla-winres -exe "stage/${BIN}" -ico assets/icon.ico -version "$VER"
+            cp assets/icon.ico stage/
+          fi
           cp README.md LICENSE viva.toml stage/
           if [ "${{ matrix.archive }}" = "zip" ]; then
             (cd stage && 7z a "../dist/parla-viva-${{ matrix.name }}.zip" .)

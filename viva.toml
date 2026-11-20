@@ -2,6 +2,7 @@
 name = "Parla Viva"
 id = "io.github.acam-infra.parla-viva"
 package = "./cmd/parla-viva"
+icon = "assets/icon.png"
 
 [mac]
 min_system = "12.0"

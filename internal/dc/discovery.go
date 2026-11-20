@@ -59,24 +59,41 @@ func DiscoverRPCServer(explicitPath string) string {
 }
 
 // DefaultAccountsDir resolves the Delta Chat accounts directory, honoring
-// DC_ACCOUNTS_PATH and platform-native Parla locations (%LOCALAPPDATA%\parla\accounts on Windows).
+// DC_ACCOUNTS_PATH and automatically preferring existing platform-native Parla
+// directories (%LOCALAPPDATA%\parla\accounts on Windows, Application Support on macOS,
+// XDG_DATA_HOME/parla/accounts on Linux).
 func DefaultAccountsDir() string {
 	if p := os.Getenv("DC_ACCOUNTS_PATH"); p != "" {
 		return p
 	}
 	if runtime.GOOS == "windows" {
 		if local := os.Getenv("LOCALAPPDATA"); local != "" {
-			return filepath.Join(local, "parla", "accounts")
+			parlaDir := filepath.Join(local, "parla", "accounts")
+			if dirExists(parlaDir) {
+				return parlaDir
+			}
+			return parlaDir
+		}
+	}
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "darwin" && home != "" {
+		macParla := filepath.Join(home, "Library", "Application Support", "parla", "accounts")
+		if dirExists(macParla) {
+			return macParla
 		}
 	}
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		return filepath.Join(xdg, "parla", "accounts")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
+	if home == "" {
 		return "accounts"
 	}
 	return filepath.Join(home, ".local", "share", "parla", "accounts")
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func isExecutable(path string) bool {

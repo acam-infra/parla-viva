@@ -7,11 +7,13 @@ import (
 	"os"
 
 	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/app/iconpng"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 
 	"github.com/acam-infra/parla-viva/internal/agentcli"
 	"github.com/acam-infra/parla-viva/internal/appui"
+	"github.com/acam-infra/parla-viva/internal/assets"
 	"github.com/acam-infra/parla-viva/internal/dc"
 )
 
@@ -71,8 +73,10 @@ func main() {
 		View:  model.Page,
 		Theme: &model.Theme,
 	})
+	winIcon, _ := iconpng.Decode(assets.AppIconPNG)
 	cfg := ui.Configure(page, app.Config{
 		Title:       "Parla Viva",
+		Icon:        winIcon,
 		Width:       1200,
 		Height:      780,
 		Web:         webHost,

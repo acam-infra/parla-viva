@@ -106,7 +106,7 @@ func (m *Model) sidebarPane(c ui.C) {
 					m.QuickQuery = ""
 				}
 			})
-			if ui.Button(c, "Settings").XSmall().Ghost().Clicked() {
+			if iconBtn(c, "Settings", IconSettings, true).Clicked() {
 				m.SettingsOpen = true
 			}
 		})
@@ -273,13 +273,13 @@ func (m *Model) conversationPane(c ui.C) {
 				}
 				ui.Text(c, meta).FontSize(12).Muted()
 			})
-			if ui.Button(c, "Find").XSmall().Ghost().Clicked() {
+			if iconBtn(c, "Find", IconSearch, true).Clicked() {
 				m.SearchOpen = !m.SearchOpen
 			}
-			if ui.Button(c, "Gallery").XSmall().Ghost().Clicked() {
+			if iconBtn(c, "Gallery", IconGallery, true).Clicked() {
 				m.GalleryOpen = true
 			}
-			moreBtn := ui.Button(c, "More").XSmall().Outline()
+			moreBtn := iconBtn(c, "More", IconMore, true)
 			if moreBtn.Clicked() {
 				m.MoreMenuOpen = !m.MoreMenuOpen
 			}
@@ -406,9 +406,13 @@ func (m *Model) conversationPane(c ui.C) {
 							Background(theme.Card).Border(1, theme.Border).Items(ui.Center).Children(func() {
 							if att.IsImage && att.Bitmap.Width > 0 {
 								ui.Image(c, att.Bitmap).Size(36, 36).Radius(6)
+							} else {
+								ui.Icon(c, IconFile).Size(16, 16).Color(theme.Primary)
 							}
 							ui.Text(c, att.Name).FontSize(12).Mono()
-							if ui.Button(c, "x").XSmall().Ghost().Clicked() {
+							if ui.ButtonBase(c, "Remove attachment").Size(22, 22).Radius(6).Ghost().Center().Children(func() {
+								ui.Icon(c, IconClose).Size(12, 12).Color(theme.MutedForeground)
+							}).Clicked() {
 								c.After(func() { m.RemoveAttachment(idx) })
 							}
 						})
@@ -420,22 +424,33 @@ func (m *Model) conversationPane(c ui.C) {
 			})
 		}
 
-		// Unified bottom composer bar
-		ui.Row(c).FillWidth().Pad(12).Gap(8).Items(ui.Center).
+		// Unified bottom composer bar with crisp GPU vector icons
+		ui.Row(c).FillWidth().PadX(12).PadY(10).Gap(8).Items(ui.Center).
 			Background(theme.Card).Border(1, theme.Border).Children(func() {
-			if ui.Button(c, "+ Photos").Small().Outline().Clicked() {
+			if iconBtn(c, "Attach file", IconPaperclip, true).Clicked() {
 				opts := app.OpenFileOptions{
-					Title:         "Select images or files",
+					Title:         "Select files to send",
 					AllowMultiple: true,
 				}
 				if paths, err := app.OpenFiles(opts); err == nil && len(paths) > 0 {
 					m.AddAttachments(paths)
-				} else {
+				} else if m.DemoMode {
+					m.AddAttachments([]string{"release-notes.md"})
+				}
+			}
+			if iconBtn(c, "Attach photos", IconImage, true).Clicked() {
+				opts := app.OpenFileOptions{
+					Title:         "Select images to send",
+					AllowMultiple: true,
+				}
+				if paths, err := app.OpenFiles(opts); err == nil && len(paths) > 0 {
+					m.AddAttachments(paths)
+				} else if m.DemoMode {
 					m.AddAttachments([]string{"photo-1.png", "photo-2.jpg"})
 				}
 			}
 			field := ui.TextField(c, &m.Draft, "Message", "Write a message or drop files...")
-			field.Grow(1).Radius(8)
+			field.Grow(1).Radius(10)
 			if m.EnterToSend && field.Submitted() {
 				m.SendDraft()
 			}
@@ -446,10 +461,34 @@ func (m *Model) conversationPane(c ui.C) {
 				sendLabel = fmt.Sprintf("Send (%d)", len(m.PendingFiles))
 			}
 			canSend := strings.TrimSpace(m.Draft) != "" || len(m.PendingFiles) > 0
-			if ui.Button(c, sendLabel).Disabled(!canSend).Clicked() {
+			sendBtn := ui.ButtonBase(c, sendLabel).Height(34).PadX(12).Radius(10).Gap(6).
+				Items(ui.Center).Justify(ui.Center).Background(theme.Primary).Disabled(!canSend).
+				Children(func() {
+					ui.Icon(c, IconSend).Size(15, 15).Color(theme.PrimaryForeground)
+					if m.EditingMsgID > 0 {
+						ui.Text(c, "Save").FontSize(12.5).Bold().Color(theme.PrimaryForeground)
+					} else if len(m.PendingFiles) > 1 {
+						ui.Textf(c, "%d", len(m.PendingFiles)).FontSize(12).Bold().Color(theme.PrimaryForeground)
+					}
+				})
+			if sendBtn.Clicked() {
 				m.SendDraft()
 			}
 		})
+	})
+}
+
+
+func iconBtn(c ui.C, label string, icon gfx.Icon, ghost bool) ui.Box {
+	theme := c.Theme()
+	b := ui.ButtonBase(c, label).Size(32, 32).Radius(8).Center().Shrink(0)
+	if ghost {
+		b = b.Ghost()
+	} else {
+		b = b.Outline()
+	}
+	return b.Children(func() {
+		ui.Icon(c, icon).Size(16, 16).Color(theme.Foreground)
 	})
 }
 
