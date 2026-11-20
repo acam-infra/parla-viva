@@ -103,7 +103,7 @@ func NewDemoModel() *Model {
 		RenderMD:      true,
 		NotifyEnabled: true,
 		Theme:         gfx.LightTheme(),
-		Split:         ui.SplitterState{Pos: 280},
+		Split:         ui.SplitterState{Pos: 320},
 		Messages:      make(map[int][]dc.Message),
 		Windows:       make(map[int]history.Window),
 		SelectedMsgs:  make(map[int]bool),

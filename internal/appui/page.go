@@ -67,7 +67,7 @@ func (m *Model) sidebarPane(c ui.C) {
 		Background(theme.Card).Children(func() {
 		// Header row: brand + quick actions
 		ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
-			ui.Text(c, "Parla Viva").FontSize(16).Bold()
+			ui.Text(c, "Parla Viva").FontSize(16).Bold().Shrink(0)
 			ui.Spacer(c)
 			if ui.Button(c, "New").XSmall().Outline().Clicked() {
 				m.NewChatOpen = true
@@ -112,8 +112,8 @@ func (m *Model) sidebarPane(c ui.C) {
 						avatarBg = theme.Primary
 						avatarFg = theme.PrimaryForeground
 					}
-					ui.Row(c).Size(36, 36).Radius(18).Background(avatarBg).Center().Children(func() {
-						ui.Text(c, chat.Initials()).FontSize(12).Bold().Color(avatarFg)
+					ui.Row(c).Size(40, 40).Radius(20).Shrink(0).Background(avatarBg).Center().Children(func() {
+						ui.Text(c, chat.Initials()).FontSize(11).Bold().Color(avatarFg)
 					})
 
 					// Title + preview
