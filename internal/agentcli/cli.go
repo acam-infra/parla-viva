@@ -15,13 +15,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/acam-infra/parla-viva/internal/applog"
 	"github.com/acam-infra/parla-viva/internal/backup"
+	"github.com/acam-infra/parla-viva/internal/config"
 	"github.com/acam-infra/parla-viva/internal/dc"
 	"github.com/acam-infra/parla-viva/internal/preview"
 )
 
 // Version is the current Parla Viva CLI & app version.
-const Version = "0.6.0"
+const Version = "0.7.0"
 
 // knownCommands lists top-level subcommands handled by the Agent CLI.
 var knownCommands = map[string]bool{
@@ -44,6 +46,8 @@ var knownCommands = map[string]bool{
 	"watch":    true,
 	"preview":  true,
 	"backup":   true,
+	"config":   true,
+	"logs":     true,
 	"serve":    true,
 }
 
@@ -226,6 +230,10 @@ func Run(ctx context.Context, args []string, opts Options) int {
 		err = cmdPreview(rest, g, opts)
 	case "backup":
 		err = cmdBackup(rest, g, opts)
+	case "config":
+		err = cmdConfig(rest, g, opts)
+	case "logs":
+		err = cmdLogs(rest, g, opts)
 	case "doctor":
 		err = cmdDoctor(ctx, g, opts)
 	case "serve":
@@ -424,10 +432,14 @@ func cmdDoctor(ctx context.Context, g globalOpts, opts Options) error {
 		ipcPID = ipcClient.State().PID
 	}
 
+	appCfg, cfgPath, _ := config.Load(g.accountsDir)
 	info := map[string]any{
 		"ok":          true,
 		"version":     Version,
 		"accountsDir": g.accountsDir,
+		"configPath":  cfgPath,
+		"logFile":     appCfg.LogFile,
+		"logLevel":    appCfg.LogLevel,
 		"rpcServer":   rpcBin,
 		"mode":        mode,
 		"ipcAddr":     ipcAddr,
@@ -1184,6 +1196,71 @@ func cmdServe(ctx context.Context, g globalOpts, opts Options) error {
 	return nil
 }
 
+
+func cmdConfig(args []string, g globalOpts, opts Options) error {
+	sub := "show"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		sub = args[0]
+		args = args[1:]
+	}
+	cfg, cfgPath, err := config.Load(g.accountsDir)
+	if err != nil {
+		return err
+	}
+	switch sub {
+	case "path":
+		return writeOut(opts.Stdout, g.jsonOut, map[string]any{"path": cfgPath}, cfgPath+"\n")
+	case "show":
+		raw, _ := json.MarshalIndent(cfg, "", "  ")
+		return writeOut(opts.Stdout, g.jsonOut, map[string]any{"path": cfgPath, "config": cfg},
+			fmt.Sprintf("Config: %s\n%s\n", cfgPath, string(raw)))
+	case "init":
+		if err := config.Save(cfgPath, cfg); err != nil {
+			return err
+		}
+		return writeOut(opts.Stdout, g.jsonOut, map[string]any{"ok": true, "path": cfgPath, "config": cfg},
+			fmt.Sprintf("Initialized config: %s\n", cfgPath))
+	case "set":
+		if len(args) < 2 {
+			return errors.New("config set requires <key> <value>")
+		}
+		if err := cfg.SetKey(args[0], args[1]); err != nil {
+			return err
+		}
+		if err := config.Save(cfgPath, cfg); err != nil {
+			return err
+		}
+		return writeOut(opts.Stdout, g.jsonOut, map[string]any{"ok": true, "path": cfgPath, "key": args[0], "value": args[1], "config": cfg},
+			fmt.Sprintf("Updated %s = %s (%s)\n", args[0], args[1], cfgPath))
+	default:
+		return fmt.Errorf("unknown config subcommand %q (use show, init, set, path)", sub)
+	}
+}
+
+func cmdLogs(args []string, g globalOpts, opts Options) error {
+	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	lines := fs.Int("lines", 50, "number of recent log lines")
+	filter := fs.String("filter", "", "case-insensitive substring or level filter (e.g. ERROR, WARN)")
+	showPath := fs.Bool("path", false, "print log file path only")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, _, _ := config.Load(g.accountsDir)
+	if *showPath {
+		return writeOut(opts.Stdout, g.jsonOut, map[string]any{"path": cfg.LogFile}, cfg.LogFile+"\n")
+	}
+	out, err := applog.TailLines(cfg.LogFile, *lines, *filter)
+	if err != nil {
+		return err
+	}
+	return writeOut(opts.Stdout, g.jsonOut, map[string]any{
+		"path":  cfg.LogFile,
+		"count": len(out),
+		"lines": out,
+	}, strings.Join(out, "\n")+"\n")
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintf(w, `Parla Viva v%s — Desktop Client & Agent CLI
 
@@ -1205,6 +1282,8 @@ Commands:
   watch    [--chat ID] [--incoming] [--once] [--timeout 60s]  Stream live events (NDJSON with --json)
   preview  <filePath>                                     Inspect any common file format
   backup   (create|verify|restore)                        AES-256-GCM SafeStore backup
+  config   [show|init|set|path]                           View or edit parla-viva.json
+  logs     [--lines 50] [--filter WARN|ERROR] [--path]    Inspect rotating app logs
   serve                                                   Headless IPC daemon for agents
   version                                                 Show version
 

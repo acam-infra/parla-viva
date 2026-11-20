@@ -12,6 +12,8 @@ import (
 	"github.com/vivaui/viva/ui"
 
 	"github.com/acam-infra/parla-viva/internal/agentcli"
+	"github.com/acam-infra/parla-viva/internal/applog"
+	"github.com/acam-infra/parla-viva/internal/config"
 	"github.com/acam-infra/parla-viva/internal/appui"
 	"github.com/acam-infra/parla-viva/internal/assets"
 	"github.com/acam-infra/parla-viva/internal/dc"
@@ -33,23 +35,55 @@ func main() {
 	var transport *dc.Transport
 	var ipcSrv *dc.IPCServer
 
+	appCfg, cfgPath, _ := config.Load(*accountsPath)
+	logger, _ := applog.Open(appCfg.LogFile, appCfg.LogLevel, appCfg.LogMaxMB)
+	if logger != nil {
+		defer logger.Close()
+		logger.Info("startup", "version", agentcli.Version, "accountsDir", *accountsPath, "config", cfgPath, "logLevel", appCfg.LogLevel)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	effRPC := *rpcPath
+	if effRPC == "" {
+		effRPC = appCfg.RPCServer
+	}
+
 	if !*demoFlag {
-		if bin := dc.DiscoverRPCServer(*rpcPath); bin != "" {
+		if bin := dc.DiscoverRPCServer(effRPC); bin != "" {
 			transport = dc.NewTransport()
 			if err := transport.StartProcess(bin, *accountsPath); err == nil {
 				client := dc.NewClient(transport)
 				model = appui.NewLiveModel(client, inv)
 				model.AccountsPath = *accountsPath
-				model.LoadCache(*accountsPath)
+				model.EnterToSend = appCfg.EnterToSend
+				if appCfg.Theme == "dark" {
+					model.SetDarkMode(true)
+				}
+				switch appCfg.Layout {
+				case "workspace":
+					model.Layout = appui.LayoutWorkspace
+				case "compact":
+					model.Layout = appui.LayoutCompact
+				}
+				if !appCfg.Notifications && model.Notifier != nil {
+					model.Notifier.Close()
+					model.Notifier = nil
+				}
+				cacheHit := model.LoadCache(*accountsPath)
 				if srv, ierr := dc.StartIPCServer(transport, *accountsPath); ierr == nil {
 					ipcSrv = srv
 					model.OnEvent = srv.PublishEvent
+					if logger != nil {
+						logger.Info("ipc_ready", "addr", srv.Addr(), "cacheHit", cacheHit, "rpcServer", bin)
+					}
 				}
 				model.StartLiveSync(ctx)
 			} else {
+				if logger != nil {
+					logger.Error("rpc_start_failed", "bin", bin, "err", err)
+				}
 				log.Printf("deltachat-rpc-server start failed (%v); falling back to demo mode", err)
 			}
 		}

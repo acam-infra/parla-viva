@@ -1,83 +1,64 @@
 # Parla Viva
 
-A Go-first, GPU-native [Delta Chat](https://delta.chat) desktop client migrating [trufae/parla](https://github.com/trufae/parla)'s architecture and UX onto the [vivaui/viva](https://github.com/vivaui/viva) UI framework.
+A fast, GPU-native encrypted desktop messenger and Agent CLI for [Delta Chat / Chatmail](https://delta.chat/), migrated from [Parla](https://github.com/trufae/parla) to Go on top of [Viva](https://github.com/vivaui/viva).
 
-将 [trufae/parla](https://github.com/trufae/parla)（Vala + GTK4/libadwaita）完整迁移至 [vivaui/viva](https://github.com/vivaui/viva)（Go GPU 原生桌面框架：Cocoa/Metal、Win32/Direct3D 11、XCB/Vulkan），通过 stdio JSON-RPC 直连 `deltachat-rpc-server`，彻底摆脱 GTK4 / libadwaita / MSYS2 / AccessKit 跨平台打包复杂度。
+## Highlights
 
-## Architecture
-
-- **`internal/dc`**: Stdio JSON-RPC 2.0 transport and typed Delta Chat client (ported from Parla's `rpc_transport.vala` & `rpc_client.vala`), featuring a single writer goroutine, connection-generation invalidation, and `deltachat-rpc-server` auto-discovery.
-- **`internal/history`**: Bounded 61-message context window for distant search jumps (`target-30..target+30`), unread-divider initial batching, and bidirectional incremental expansion (ported from Parla's `message_history.vala` / CORE-001).
-- **`internal/webxdc`**: Offline `.xdc` ZIP archive server wired to Viva's `app.WebScheme` (`webxdc://app/`), enforcing `Ephemeral: true`, `BridgeMainFrameOnly: true`, path-traversal rejection, `connect-src 'none'` CSP, and a `window.webxdc` bridge over `window.viva.postMessage`.
-- **`internal/appui`**: Declarative Viva `ui.C` desktop interface featuring:
-  - Resizable split view (`ui.Splitter`) with chatlist search, filters (`All` / `Unread` / `Pinned` / `Groups`), pinned indicators, and unread badges
-  - Three Parla conversation layouts (`Bubble` via `ui/message`, `Compact IRC`, and `Workspace`)
-  - Pinned messages bar, in-chat search (`Ctrl/Cmd+F`), Quick Switcher (`Ctrl/Cmd+K`), reply previews, emoji reactions, Light/Dark themes, and Settings modal (`Ctrl/Cmd+,`)
-  - Interactive offline preview (`--demo`) when `deltachat-rpc-server` is not installed
-- **Headless UI Testing**: Driven directly by Viva's `app.NewDriver` with zero display server required (`go test ./...`).
+- **Instant First Paint + O(1) Delta Sync**: Local disk snapshot cache (`.parla-viva-cache.json`) renders accounts, chats, and recent messages on Frame 1 before network sync; startup wakes IMAP IDLE/SMTP in parallel at `t=0`, and a non-blocking event pump coalesces rapid bursts while fast-tracking `IncomingMsg`.
+- **Unified Desktop UX**: Fixed clipped sidebar, floating pill composer with crisp Lucide-style GPU vector icons, Telegram-style message grouping, compact clickable file/Webxdc cards, multi-image/file drag-and-drop & picker, and universal in-app previewer (Image lightbox + zoom, Markdown, JSON, CSV/TSV table, line-numbered code, ZIP/XDC archive, vCard).
+- **Native OS Notifications**: Asynchronous, per-chat throttled desktop notifications (macOS Notification Center, Windows Toast, Linux `notify-send`) + in-app toasts.
+- **Built-in Agent CLI + Local IPC Bridge**: Single binary launches the desktop GUI with no arguments, or runs machine-readable (`--json` / NDJSON) CLI commands with subcommands. While the GUI (or `parla-viva serve`) is running, CLI calls automatically route through an authenticated localhost IPC bridge (`127.0.0.1`) with zero `accounts.lock` conflicts.
+- **SafeStore AES-256-GCM Backups**: Encrypted archive creation, SHA-256 manifest verification, and restore from both GUI Settings and CLI.
+- **Structured Config & Rotating Logs**: Zero-flag defaults with `parla-viva.json` configuration and size-rotating `slog` logs (`parla-viva config` / `parla-viva logs`).
 
 ## Quick Start
 
-```sh
-# Run all unit, fake-RPC, Webxdc security, and Viva headless UI tests
-go test -v ./...
+Download the latest tri-platform release (`windows-amd64.zip`, `darwin-arm64.tar.gz`, `linux-amd64.tar.gz`) from [Releases](https://github.com/acam-infra/parla-viva/releases):
 
-# Launch in interactive offline preview mode (no deltachat-rpc-server needed)
-go run ./cmd/parla-viva --demo
+- **Windows**: Extract `parla-viva.exe` (includes embedded app icon & version metadata) and run it directly, or use `scripts/install-windows.ps1`. Existing `%LOCALAPPDATA%\parla\accounts` and `deltachat-rpc-server.exe` are auto-detected.
+- **macOS (Apple Silicon)**: Run `parla-viva` or package into `~/Applications/Parla Viva.app`. Existing Parla accounts (`~/.local/share/parla/accounts` or `~/Library/Application Support/parla/accounts`) are auto-detected.
+- **Linux**: Run `./parla-viva` for desktop GUI or `./parla-viva serve` for a headless server IPC daemon.
 
-# Launch connected to a local deltachat-rpc-server (pip install deltachat-rpc-server)
-go run ./cmd/parla-viva
-```
+## Agent CLI Cheat Sheet
 
-## Keyboard Shortcuts
-
-| Action | Linux / Windows | macOS |
-| --- | --- | --- |
-| Quick chat switcher | `Ctrl+K` | `Command+K` |
-| Search in conversation | `Ctrl+F` | `Command+F` |
-| New chat | `Ctrl+N` | `Command+N` |
-| Settings | `Ctrl+,` | `Command+,` |
-
-## Build & Package
-
-```sh
-# Build headless inspection binary
-go build -tags vivahead -o build/parla-viva-headless ./cmd/parla-viva
-
-# Build standard release binary
-go build -trimpath -ldflags="-s -w" -o build/parla-viva ./cmd/parla-viva
-```
-
-## License
-
-Apache License 2.0. Inspired by and migrating architecture from [trufae/parla](https://github.com/trufae/parla), built on [vivaui/viva](https://github.com/vivaui/viva).
-
-## Agent CLI & Local IPC Bridge (`v0.4.0`)
-
-`parla-viva` ships with a built-in Agent CLI designed for both human terminals and AI agents:
-- **Zero lock conflicts with GUI**: When the desktop GUI (or `parla-viva serve`) is running, it binds an authenticated localhost IPC bridge (`127.0.0.1`, descriptor stored at `<accountsDir>/.parla-viva-ipc.json` with mode `0600`). CLI commands automatically route through the live bridge so you can query chats, send messages/files, and stream events while the GUI stays open and updates in real time. When no GUI is running (or `--direct` is passed), the CLI automatically launches `deltachat-rpc-server` directly.
-- **Machine-readable `--json` / NDJSON output** on every command.
+Every command supports `--json` for scripts and AI agents (see also `skills/parla-viva-cli/SKILL.md`):
 
 ```bash
-# Check RPC server, IPC bridge status, and accounts
+# Diagnostics (IPC bridge, RPC server, accounts, config & log paths)
 parla-viva doctor --json
 
-# List accounts & chats
+# Accounts, chats & messages
 parla-viva accounts list --json
-parla-viva chats list --json
-
-# Read recent messages or search
+parla-viva chats list --limit 20 --json
 parla-viva messages --chat 12 --limit 20 --json
 
-# Send text (or stdin with --text -), multiple files/images, or reply
-parla-viva send --chat 12 --text "Hello from Agent CLI" --json
-parla-viva send --to user@nine.testrun.org --text "Report attached" --file ./chart.png --file ./data.csv --json
+# Send text, stdin (--text -), replies, or multiple files/images
+parla-viva send --chat 12 --text "Status update" --json
+parla-viva send --to peer@nine.testrun.org --text "Attached" --file ./chart.png --file ./data.csv --json
 
-# Join via SecureJoin link & wait for the next incoming reply (NDJSON)
-parla-viva join --link "https://i.delta.chat/#..." --json
+# Wait for the next incoming reply (agent request-reply loop)
 parla-viva watch --chat 12 --incoming --once --timeout 60s --json
 
-# Inspect any common file format or manage AES-256-GCM SafeStore backups
+# SecureJoin pairing, file preview & encrypted backups
+parla-viva invite --json
+parla-viva join --link "https://i.delta.chat/#..." --json
 parla-viva preview ./data.csv --json
-parla-viva backup create --out ./backup.pvbackup --passphrase "..." --json
+parla-viva backup create --out ./backup.pvbackup --passphrase "<SECRET>" --json
+
+# Configuration & structured logs
+parla-viva config init
+parla-viva config show --json
+parla-viva config set theme dark
+parla-viva config set logLevel debug
+parla-viva logs --lines 50
+```
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all configuration keys, environment variables, and file locations.
+
+## Building & Testing
+
+```bash
+go vet ./...
+go test -race -count=1 ./...
+go build -trimpath -ldflags="-s -w" -o build/parla-viva ./cmd/parla-viva
 ```
