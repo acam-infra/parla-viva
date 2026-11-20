@@ -402,15 +402,21 @@ func (m *Model) conversationPane(c ui.C) {
 					for i := range m.PendingFiles {
 						idx := i
 						att := m.PendingFiles[idx]
-						ui.Row(c.KeyInt(idx)).Pad(6).Gap(6).Radius(8).
+						kind := preview.DetectKind(att.Name)
+						ui.Row(c.KeyInt(idx)).MaxWidth(210).Pad(6).Gap(8).Radius(10).
 							Background(theme.Card).Border(1, theme.Border).Items(ui.Center).Children(func() {
 							if att.IsImage && att.Bitmap.Width > 0 {
-								ui.Image(c, att.Bitmap).Size(36, 36).Radius(6)
+								ui.Image(c, att.Bitmap).Size(34, 34).Radius(7)
 							} else {
-								ui.Icon(c, IconFile).Size(16, 16).Color(theme.Primary)
+								ui.Row(c).Size(34, 34).Radius(7).Shrink(0).Background(theme.Secondary).Center().Children(func() {
+									ui.Icon(c, fileKindIcon(kind)).Size(16, 16).Color(theme.Primary)
+								})
 							}
-							ui.Text(c, att.Name).FontSize(12).Mono()
-							if ui.ButtonBase(c, "Remove attachment").Size(22, 22).Radius(6).Ghost().Center().Children(func() {
+							ui.Column(c).Grow(1).Gap(1).Children(func() {
+								ui.Text(c, att.Name).FontSize(12).Bold().Ellipsis()
+								ui.Text(c, string(kind)).FontSize(10.5).Muted()
+							})
+							if ui.ButtonBase(c, "Remove attachment").Size(22, 22).Radius(6).Ghost().Center().Shrink(0).Children(func() {
 								ui.Icon(c, IconClose).Size(12, 12).Color(theme.MutedForeground)
 							}).Clicked() {
 								c.After(func() { m.RemoveAttachment(idx) })
@@ -490,6 +496,35 @@ func iconBtn(c ui.C, label string, icon gfx.Icon, ghost bool) ui.Box {
 	return b.Children(func() {
 		ui.Icon(c, icon).Size(16, 16).Color(theme.Foreground)
 	})
+}
+
+
+func fileKindIcon(kind preview.Kind) gfx.Icon {
+	switch kind {
+	case preview.KindImage:
+		return IconImage
+	case preview.KindJSON, preview.KindCode, preview.KindMarkdown:
+		return IconCode
+	case preview.KindCSV:
+		return IconTable
+	case preview.KindArchive:
+		return IconArchive
+	default:
+		return IconFile
+	}
+}
+
+func formatBytesShort(n int64) string {
+	switch {
+	case n <= 0:
+		return ""
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
 }
 
 const historyDefaultStep = 30
@@ -599,27 +634,42 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 					ui.Wrap(cc, msg.Text).FontSize(13.5).Color(fg)
 				}
 				if msg.ViewType == "Webxdc" {
-					ui.Row(cc).Gap(8).Pad(6).Radius(8).Background(theme.Card).Items(ui.Center).Children(func() {
-						ui.Text(cc, "Webxdc").FontSize(11).Bold().Color(theme.Primary)
-						ui.Text(cc, msg.FileName).FontSize(12).Mono().Grow(1).Ellipsis()
-						if ui.Button(cc, "Open Webxdc").XSmall().Outline().Clicked() {
-							copied := msg
-							cc.After(func() { m.OpenWebxdcMessage(copied) })
-						}
+					card := ui.ButtonBase(cc, "Open Webxdc").Width(260).Pad(8).Gap(10).Radius(10).
+						Items(ui.Center).Background(theme.Card).Border(1, theme.Border).
+						Hover(ui.Look{}.Background(theme.Hover)).Children(func() {
+						ui.Row(cc).Size(38, 38).Radius(9).Shrink(0).Background(theme.Primary).Center().Children(func() {
+							ui.Icon(cc, IconApp).Size(18, 18).Color(theme.PrimaryForeground)
+						})
+						ui.Column(cc).Grow(1).Gap(2).Children(func() {
+							ui.Text(cc, msg.FileName).FontSize(13).Bold().Color(theme.Foreground).Ellipsis()
+							ui.Text(cc, "Webxdc Mini-App · Click to launch").FontSize(11).Muted().Ellipsis()
+						})
 					})
+					if card.Clicked() {
+						copied := msg
+						cc.After(func() { m.OpenWebxdcMessage(copied) })
+					}
 				} else if msg.FileName != "" && !hasBmp {
-					kindLabel := string(preview.DetectKind(msg.FileName))
-					ui.Row(cc).Gap(8).Pad(8).Radius(8).Background(theme.Card).Border(1, theme.Border).Items(ui.Center).Children(func() {
-						ui.Text(cc, kindLabel).FontSize(11).Bold().Color(theme.Primary).Shrink(0)
-						ui.Text(cc, msg.FileName).FontSize(12).Mono().Grow(1).Ellipsis()
-						if msg.FileBytes > 0 {
-							ui.Textf(cc, "%d KB", max(msg.FileBytes/1024, 1)).FontSize(11).Muted().Shrink(0)
-						}
-						if ui.Button(cc, "Preview "+msg.FileName).XSmall().Outline().Clicked() {
-							copied := msg
-							cc.After(func() { m.OpenPreviewForMessage(copied) })
-						}
+					kind := preview.DetectKind(msg.FileName)
+					meta := string(kind)
+					if sz := formatBytesShort(msg.FileBytes); sz != "" {
+						meta += " · " + sz
+					}
+					card := ui.ButtonBase(cc, "Preview "+msg.FileName).Width(260).Pad(8).Gap(10).Radius(10).
+						Items(ui.Center).Background(theme.Card).Border(1, theme.Border).
+						Hover(ui.Look{}.Background(theme.Hover)).Children(func() {
+						ui.Row(cc).Size(38, 38).Radius(9).Shrink(0).Background(theme.Secondary).Center().Children(func() {
+							ui.Icon(cc, fileKindIcon(kind)).Size(18, 18).Color(theme.Primary)
+						})
+						ui.Column(cc).Grow(1).Gap(2).Children(func() {
+							ui.Text(cc, msg.FileName).FontSize(13).Bold().Color(theme.Foreground).Ellipsis()
+							ui.Text(cc, meta).FontSize(11).Muted().Ellipsis()
+						})
 					})
+					if card.Clicked() {
+						copied := msg
+						cc.After(func() { m.OpenPreviewForMessage(copied) })
+					}
 				}
 			})
 		})

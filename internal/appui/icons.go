@@ -105,4 +105,34 @@ var (
 		gfx.QuadTo(20, 22, 20, 20), gfx.LineTo(20, 8), gfx.ClosePath(),
 		gfx.MoveTo(14, 2), gfx.LineTo(14, 8), gfx.LineTo(20, 8),
 	)
+
+	// IconCode is a <> code/json glyph.
+	IconCode = lucideIcon(
+		gfx.MoveTo(16, 18), gfx.LineTo(22, 12), gfx.LineTo(16, 6),
+		gfx.MoveTo(8, 6), gfx.LineTo(2, 12), gfx.LineTo(8, 18),
+	)
+
+	// IconTable is a grid/spreadsheet glyph for CSV/TSV files.
+	IconTable = lucideIcon(
+		gfx.MoveTo(4, 4), gfx.LineTo(20, 4), gfx.LineTo(20, 20), gfx.LineTo(4, 20), gfx.ClosePath(),
+		gfx.MoveTo(4, 10), gfx.LineTo(20, 10),
+		gfx.MoveTo(4, 15), gfx.LineTo(20, 15),
+		gfx.MoveTo(10, 4), gfx.LineTo(10, 20),
+	)
+
+	// IconArchive is a package/zip glyph.
+	IconArchive = lucideIcon(
+		gfx.MoveTo(3, 5), gfx.LineTo(21, 5), gfx.LineTo(21, 9), gfx.LineTo(3, 9), gfx.ClosePath(),
+		gfx.MoveTo(5, 9), gfx.LineTo(5, 19), gfx.LineTo(19, 19), gfx.LineTo(19, 9),
+		gfx.MoveTo(10, 13), gfx.LineTo(14, 13),
+	)
+
+	// IconApp is a cube glyph for Webxdc mini-apps.
+	IconApp = lucideIcon(
+		gfx.MoveTo(12, 3), gfx.LineTo(20, 7.5), gfx.LineTo(20, 16.5),
+		gfx.LineTo(12, 21), gfx.LineTo(4, 16.5), gfx.LineTo(4, 7.5), gfx.ClosePath(),
+		gfx.MoveTo(12, 12), gfx.LineTo(20, 7.5),
+		gfx.MoveTo(12, 12), gfx.LineTo(12, 21),
+		gfx.MoveTo(12, 12), gfx.LineTo(4, 7.5),
+	)
 )
