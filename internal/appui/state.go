@@ -3,6 +3,7 @@ package appui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,10 +29,9 @@ var LayoutModes = []LayoutMode{LayoutBubble, LayoutCompact, LayoutWorkspace}
 
 var ChatFilters = []string{"All", "Unread", "Pinned", "Groups"}
 
-var GalleryTabs = []string{"All", "Files", "Webxdc"}
+var GalleryTabs = []string{"All", "Images", "Files", "Webxdc"}
 
 // Model holds all application state for Parla Viva.
-// The UI page function reads from Model and mutates it strictly on the window thread.
 type Model struct {
 	mu sync.Mutex
 
@@ -54,6 +54,13 @@ type Model struct {
 	Windows      map[int]history.Window
 	NextLocalID  int
 
+	// Image bitmap cache & Lightbox viewer
+	ImageCache     map[string]gfx.Bitmap
+	LightboxOpen   bool
+	LightboxTitle  string
+	LightboxBitmap gfx.Bitmap
+	LightboxZoom   float32
+
 	// Navigation & search
 	SidebarFilter string
 	SidebarQuery  string
@@ -63,16 +70,25 @@ type Model struct {
 	QuickOpen     bool
 	QuickQuery    string
 
-	// Composer & message actions
-	Draft          string
-	PendingFile    string
-	ReplyTo        *dc.Message
-	EditingMsgID   int
-	Selecting      bool
-	SelectedMsgs   map[int]bool
-	NewChatOpen    bool
-	NewChatName    string
-	NewChatAddr    string
+	// Composer, multi-image album queue & drag-and-drop
+	Draft        string
+	PendingFiles []PendingAttachment
+	DragOver     bool
+	ReplyTo      *dc.Message
+	EditingMsgID int
+	Selecting    bool
+	SelectedMsgs map[int]bool
+	NewChatOpen  bool
+	NewChatName  string
+	NewChatAddr  string
+
+	// Chatmail Onboarding / Invite & Join modal
+	InviteOpen    bool
+	InviteLink    string
+	JoinLinkInput string
+	NewAcctName   string
+	NewAcctRelay  string
+	OnboardStatus string
 
 	// Dialogs & drawers
 	AccountsOpen   bool
@@ -106,7 +122,7 @@ type Model struct {
 }
 
 // NewDemoModel constructs an interactive offline preview populated with realistic
-// encrypted Delta Chat conversations so the app works immediately without a server.
+// encrypted Delta Chat conversations and sample inline images.
 func NewDemoModel() *Model {
 	now := time.Now().Unix()
 	m := &Model{
@@ -125,6 +141,9 @@ func NewDemoModel() *Model {
 		Messages:      make(map[int][]dc.Message),
 		Windows:       make(map[int]history.Window),
 		SelectedMsgs:  make(map[int]bool),
+		ImageCache:    make(map[string]gfx.Bitmap),
+		NewAcctRelay:  dc.DefaultChatmailRelay,
+		InviteLink:    "https://i.delta.chat/#demo-invite-preview",
 		NextLocalID:   5000,
 		Accounts: []dc.Account{
 			{ID: 1, Kind: "Configured", DisplayName: "Alice", Addr: "alice@nine.testrun.org"},
@@ -133,7 +152,7 @@ func NewDemoModel() *Model {
 		Chats: []dc.ChatEntry{
 			{
 				ID: 10, Name: "Parla → Viva Migration", Kind: dc.ChatGroup, ChatType: "Group",
-				SummaryPrefix: "Bob", LastMessage: "61-message bounded history window ported!",
+				SummaryPrefix: "Bob", LastMessage: "Shared desktop screenshot & multi-image support!",
 				UnreadCount: 2, Timestamp: now - 120, IsPinned: true, WasSeenRecently: true,
 			},
 			{
@@ -154,10 +173,13 @@ func NewDemoModel() *Model {
 		},
 	}
 
+	// Pre-populate a crisp sample bitmap for the demo image message.
+	m.ImageCache["demo://preview-desktop.png"] = DemoGradientBitmap(320, 200, 3)
+
 	m.Messages[10] = []dc.Message{
 		{
 			ID: 1001, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
-			Text:      "Welcome to Parla Viva! This client speaks standard deltachat-rpc-server JSON-RPC over stdio.",
+			Text:      "Welcome to Parla Viva! Right-click any chat or message for Telegram-style quick actions.",
 			Timestamp: now - 1800, ViewType: "Text", State: dc.MsgStateInSeen, IsPinned: true,
 			Reactions: []dc.Reaction{{Emoji: "👍", Count: 2, BySelf: true}},
 		},
@@ -168,15 +190,16 @@ func NewDemoModel() *Model {
 		},
 		{
 			ID: 1003, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
-			Text:      "61-message bounded history window ported! Try switching layouts (Bubble / Compact IRC / Workspace) in Settings or pressing Ctrl+K for Quick Switcher.",
-			Timestamp: now - 120, ViewType: "Text", State: dc.MsgStateInFresh,
+			Text:      "Click the image below to open the Lightbox zoom viewer, or drag & drop multiple photos into the window.",
+			Timestamp: now - 120, ViewType: "Image", FilePath: "demo://preview-desktop.png", FileName: "preview-desktop.png",
+			FileBytes: 184320, State: dc.MsgStateInFresh,
 			Quote:     &dc.Quote{MessageID: 1002, AuthorName: "Alice", Text: "No GTK4/libadwaita/MSYS2 bundling needed..."},
 			Reactions: []dc.Reaction{{Emoji: "🔥", Count: 3}},
 		},
 		{
 			ID: 1004, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
 			Text:      "Attached architecture spec for review.",
-			Timestamp: now - 60, ViewType: "File", FileName: "architecture-v0.1.pdf", FileBytes: 248320, State: dc.MsgStateInFresh,
+			Timestamp: now - 60, ViewType: "File", FileName: "architecture-v0.2.pdf", FileBytes: 248320, State: dc.MsgStateInFresh,
 		},
 	}
 
@@ -225,6 +248,7 @@ func NewLiveModel(client *dc.Client, invalidator *app.Invalidator) *Model {
 	m.Messages = make(map[int][]dc.Message)
 	m.Windows = make(map[int]history.Window)
 	m.ActiveChatID = 0
+	m.InviteLink = ""
 	return m
 }
 
@@ -339,16 +363,15 @@ func (m *Model) loadChatMessagesAsync(acctID, chatID int) {
 	})
 }
 
-// SendDraft sends or edits the current composer text (and optional pending attachment).
+// SendDraft sends or edits the current composer text and any queued multi-image/file attachments.
 func (m *Model) SendDraft() {
 	text := strings.TrimSpace(m.Draft)
-	filePath := strings.TrimSpace(m.PendingFile)
-	if (text == "" && filePath == "") || m.ActiveChatID == 0 {
+	files := append([]PendingAttachment(nil), m.PendingFiles...)
+	if (text == "" && len(files) == 0) || m.ActiveChatID == 0 {
 		return
 	}
 	chatID := m.ActiveChatID
 
-	// Handle in-place message edit
 	if m.EditingMsgID > 0 {
 		msgID := m.EditingMsgID
 		m.EditingMsgID = 0
@@ -368,67 +391,94 @@ func (m *Model) SendDraft() {
 		}
 	}
 	m.Draft = ""
-	m.PendingFile = ""
+	m.PendingFiles = nil
 	m.ReplyTo = nil
 
 	if m.DemoMode || m.Client == nil {
-		m.NextLocalID++
-		viewType := "Text"
-		fileName := ""
-		if filePath != "" {
-			viewType = "File"
-			fileName = filePath
-			if idx := strings.LastIndexAny(filePath, "/\\"); idx >= 0 {
-				fileName = filePath[idx+1:]
+		now := time.Now().Unix()
+		if len(files) == 0 {
+			m.NextLocalID++
+			msg := dc.Message{
+				ID: m.NextLocalID, ChatID: chatID, SenderContactID: 1, SenderName: "Alice",
+				IsOutgoing: true, Text: text, Timestamp: now, ViewType: "Text",
+				State: dc.MsgStateOutDelivered, Quote: quote,
 			}
+			m.Messages[chatID] = append(m.Messages[chatID], msg)
+			m.updateChatPreview(chatID, text, now)
+			return
 		}
-		msg := dc.Message{
-			ID:              m.NextLocalID,
-			ChatID:          chatID,
-			SenderContactID: 1,
-			SenderName:      "Alice",
-			IsOutgoing:      true,
-			Text:            text,
-			FilePath:        filePath,
-			FileName:        fileName,
-			Timestamp:       time.Now().Unix(),
-			ViewType:        viewType,
-			State:           dc.MsgStateOutDelivered,
-			Quote:           quote,
-		}
-		m.Messages[chatID] = append(m.Messages[chatID], msg)
-		preview := text
-		if preview == "" {
-			preview = "Attachment: " + fileName
-		}
-		for i := range m.Chats {
-			if m.Chats[i].ID == chatID {
-				m.Chats[i].LastMessage = preview
-				m.Chats[i].SummaryPrefix = "You"
-				m.Chats[i].Timestamp = msg.Timestamp
+		for idx, att := range files {
+			m.NextLocalID++
+			vtype := "File"
+			if att.IsImage {
+				vtype = "Image"
+				if att.Bitmap.Width > 0 {
+					m.ImageCache[att.Path] = att.Bitmap
+				}
 			}
+			caption := ""
+			if idx == 0 {
+				caption = text
+			}
+			var q *dc.Quote
+			if idx == 0 {
+				q = quote
+			}
+			msg := dc.Message{
+				ID: m.NextLocalID, ChatID: chatID, SenderContactID: 1, SenderName: "Alice",
+				IsOutgoing: true, Text: caption, FilePath: att.Path, FileName: att.Name,
+				Timestamp: now, ViewType: vtype, State: dc.MsgStateOutDelivered, Quote: q,
+			}
+			m.Messages[chatID] = append(m.Messages[chatID], msg)
 		}
+		preview := fmt.Sprintf("Sent %d attachments", len(files))
+		if len(files) == 1 {
+			preview = "Attachment: " + files[0].Name
+		}
+		if text != "" {
+			preview = text
+		}
+		m.updateChatPreview(chatID, preview, now)
 		return
 	}
 
 	acctID := m.ActiveAcctID
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		var err error
-		if filePath != "" {
-			_, err = m.Client.SendFileMessage(ctx, acctID, chatID, filePath, text)
+		if len(files) == 0 {
+			if _, err := m.Client.SendTextMessage(ctx, acctID, chatID, text, quotedID); err != nil {
+				m.EnqueueUpdate(func(model *Model) {
+					model.Toaster.Show("Send failed", err.Error(), ui.ToastError)
+				})
+				return
+			}
 		} else {
-			_, err = m.Client.SendTextMessage(ctx, acctID, chatID, text, quotedID)
-		}
-		if err != nil {
-			m.EnqueueUpdate(func(model *Model) {
-				model.Toaster.Show("Send failed", err.Error(), ui.ToastError)
-			})
-			return
+			for idx, att := range files {
+				caption := ""
+				if idx == 0 {
+					caption = text
+				}
+				if _, err := m.Client.SendFileMessage(ctx, acctID, chatID, att.Path, caption); err != nil {
+					m.EnqueueUpdate(func(model *Model) {
+						model.Toaster.Show("Upload failed", att.Name+": "+err.Error(), ui.ToastError)
+					})
+					break
+				}
+			}
 		}
 		m.loadChatMessagesAsync(acctID, chatID)
 	}()
+}
+
+func (m *Model) updateChatPreview(chatID int, preview string, ts int64) {
+	for i := range m.Chats {
+		if m.Chats[i].ID == chatID {
+			m.Chats[i].LastMessage = preview
+			m.Chats[i].SummaryPrefix = "You"
+			m.Chats[i].Timestamp = ts
+		}
+	}
 }
 
 // ToggleReaction toggles an emoji reaction on a message.
@@ -554,11 +604,13 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 		_ = m.Client.StartIOForAllAccounts(ctx)
 		ids, _ := m.Client.GetChatlistEntries(ctx, acctID, nil, "")
 		chats, _ := m.Client.GetChatlistItems(ctx, acctID, ids)
+		qr, _ := m.Client.GetChatSecurejoinQRCode(ctx, acctID, 0)
 
 		m.EnqueueUpdate(func(model *Model) {
 			model.Accounts = accounts
 			model.ActiveAcctID = acctID
 			model.Chats = chats
+			model.InviteLink = qr
 			if len(chats) > 0 && model.ActiveChatID == 0 {
 				model.SelectChat(chats[0].ID)
 			}
@@ -584,4 +636,76 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// MessageBitmap returns a cached gfx.Bitmap for an image message, decoding lazily if needed.
+func (m *Model) MessageBitmap(msg dc.Message) (gfx.Bitmap, bool) {
+	if msg.FilePath == "" {
+		return gfx.Bitmap{}, false
+	}
+	if bmp, ok := m.ImageCache[msg.FilePath]; ok && bmp.Width > 0 {
+		return bmp, true
+	}
+	if !IsImagePath(msg.FilePath) && msg.ViewType != "Image" {
+		return gfx.Bitmap{}, false
+	}
+	if bmp, ok := LoadBitmap(msg.FilePath, 480); ok {
+		m.ImageCache[msg.FilePath] = bmp
+		return bmp, true
+	}
+	return gfx.Bitmap{}, false
+}
+
+// AddAttachments queues one or more files/images for multi-attachment upload.
+func (m *Model) AddAttachments(paths []string) {
+	for i, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		name := filepath.Base(p)
+		isImg := IsImagePath(p)
+		var bmp gfx.Bitmap
+		if isImg {
+			if loaded, ok := LoadBitmap(p, 240); ok {
+				bmp = loaded
+			} else {
+				bmp = DemoGradientBitmap(160, 120, byte(len(m.PendingFiles)+i+1))
+			}
+		}
+		m.PendingFiles = append(m.PendingFiles, PendingAttachment{
+			Path:    p,
+			Name:    name,
+			IsImage: isImg,
+			Bitmap:  bmp,
+		})
+	}
+}
+
+// RemoveAttachment removes one queued attachment by index.
+func (m *Model) RemoveAttachment(idx int) {
+	if idx < 0 || idx >= len(m.PendingFiles) {
+		return
+	}
+	m.PendingFiles = append(m.PendingFiles[:idx], m.PendingFiles[idx+1:]...)
+}
+
+// HandleFileDrop implements app.Config.OnFileDrop for Telegram-style drag-and-drop multi-upload.
+func (m *Model) HandleFileDrop(ev gfx.FileDropEvent) gfx.EventResult {
+	switch ev.Phase {
+	case gfx.FileDropOver:
+		m.DragOver = true
+		return gfx.EventResult{Handled: true, Repaint: true}
+	case gfx.FileDropLeave:
+		m.DragOver = false
+		return gfx.EventResult{Handled: true, Repaint: true}
+	case gfx.FileDropDrop:
+		m.DragOver = false
+		if len(ev.Paths) > 0 {
+			m.AddAttachments(ev.Paths)
+			m.Toaster.Show("Files attached", fmt.Sprintf("%d item(s) ready to send", len(ev.Paths)), ui.ToastInfo)
+		}
+		return gfx.EventResult{Handled: true, Repaint: true}
+	}
+	return gfx.EventResult{}
 }

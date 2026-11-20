@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 
 	"github.com/acam-infra/parla-viva/internal/backup"
@@ -33,8 +36,10 @@ func (m *Model) SwitchAccount(acctID int) {
 			}
 			ids, _ := m.Client.GetChatlistEntries(ctx, acctID, nil, "")
 			chats, _ := m.Client.GetChatlistItems(ctx, acctID, ids)
+			qr, _ := m.Client.GetChatSecurejoinQRCode(ctx, acctID, 0)
 			m.EnqueueUpdate(func(model *Model) {
 				model.Chats = chats
+				model.InviteLink = qr
 				model.ActiveChatID = 0
 				if len(chats) > 0 {
 					model.SelectChat(chats[0].ID)
@@ -42,6 +47,105 @@ func (m *Model) SwitchAccount(acctID int) {
 			})
 		}()
 	}
+}
+
+// CreateNewChatmailAccount provisions a new Chatmail profile (live RPC or demo).
+func (m *Model) CreateNewChatmailAccount() {
+	name := strings.TrimSpace(m.NewAcctName)
+	if name == "" {
+		name = "Parla Viva User"
+	}
+	relay := strings.TrimSpace(m.NewAcctRelay)
+	if relay == "" {
+		relay = dc.DefaultChatmailRelay
+	}
+	if m.DemoMode || m.Client == nil {
+		newID := len(m.Accounts) + 1
+		addr := fmt.Sprintf("%s@nine.testrun.org", strings.ToLower(strings.ReplaceAll(name, " ", "")))
+		m.Accounts = append(m.Accounts, dc.Account{ID: newID, Kind: "Configured", DisplayName: name, Addr: addr})
+		m.ActiveAcctID = newID
+		m.InviteLink = "https://i.delta.chat/#demo-" + addr
+		m.OnboardStatus = "Created demo profile: " + addr
+		m.Toaster.Show("Account created", addr, ui.ToastSuccess)
+		return
+	}
+	m.OnboardStatus = "Provisioning Chatmail account on " + relay + "..."
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		id, qr, err := m.Client.CreateChatmailAccount(ctx, name, relay)
+		if err != nil {
+			m.EnqueueUpdate(func(model *Model) {
+				model.OnboardStatus = "Account creation failed: " + err.Error()
+			})
+			return
+		}
+		accts, _ := m.Client.GetAllAccounts(ctx)
+		m.EnqueueUpdate(func(model *Model) {
+			model.Accounts = accts
+			model.ActiveAcctID = id
+			model.InviteLink = qr
+			model.OnboardStatus = "Account ready! Share your invite link below."
+			model.Toaster.Show("Chatmail ready", name, ui.ToastSuccess)
+		})
+	}()
+}
+
+// JoinViaInviteLink redeems a Delta Chat / Parla invite link (https://i.delta.chat/#... or openpgp4fpr:...).
+func (m *Model) JoinViaInviteLink() {
+	link := strings.TrimSpace(m.JoinLinkInput)
+	if link == "" {
+		m.OnboardStatus = "Paste an invite link (https://i.delta.chat/#... or openpgp4fpr:...)."
+		return
+	}
+	if m.DemoMode || m.Client == nil {
+		m.CreateDemoChat("Paired Parla Contact", link)
+		m.JoinLinkInput = ""
+		m.InviteOpen = false
+		return
+	}
+	acctID := m.ActiveAcctID
+	m.OnboardStatus = "Joining encrypted chat..."
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		chatID, err := m.Client.SecureJoin(ctx, acctID, link)
+		if err != nil {
+			m.EnqueueUpdate(func(model *Model) {
+				model.OnboardStatus = "Join failed: " + err.Error()
+			})
+			return
+		}
+		ids, _ := m.Client.GetChatlistEntries(ctx, acctID, nil, "")
+		chats, _ := m.Client.GetChatlistItems(ctx, acctID, ids)
+		m.EnqueueUpdate(func(model *Model) {
+			model.Chats = chats
+			model.JoinLinkInput = ""
+			model.InviteOpen = false
+			model.SelectChat(chatID)
+			model.Toaster.Show("Encrypted chat paired", "SecureJoin started", ui.ToastSuccess)
+		})
+	}()
+}
+
+// CopyInviteLink copies the active account's invite link to the OS clipboard.
+func (m *Model) CopyInviteLink() {
+	if m.InviteLink == "" {
+		return
+	}
+	_ = app.SetClipboardText(m.InviteLink)
+	m.Toaster.Show("Invite link copied", "Paste into Parla on Windows/Linux/macOS", ui.ToastSuccess)
+}
+
+// OpenLightbox opens the Telegram-style image preview modal.
+func (m *Model) OpenLightbox(title string, bmp gfx.Bitmap) {
+	if bmp.Width <= 0 || bmp.Height <= 0 {
+		return
+	}
+	m.LightboxTitle = title
+	m.LightboxBitmap = bmp
+	m.LightboxZoom = 0 // 0 = fit to viewport
+	m.LightboxOpen = true
 }
 
 // TogglePinChat pins or unpins the active chat.
@@ -170,8 +274,12 @@ func (m *Model) GalleryItems() []dc.Message {
 			continue
 		}
 		switch m.GalleryTab {
+		case "Images":
+			if msg.ViewType != "Image" && !IsImagePath(msg.FileName) {
+				continue
+			}
 		case "Files":
-			if msg.ViewType != "File" && msg.ViewType != "Image" {
+			if msg.ViewType != "File" {
 				continue
 			}
 		case "Webxdc":

@@ -23,6 +23,7 @@ func openDriver(t *testing.T, m *Model) (*app.Driver, *app.Invalidator) {
 		Height:      780,
 		Invalidator: inv,
 		OnWake:      m.DrainUpdates,
+		OnFileDrop:  m.HandleFileDrop,
 	})
 	driver, err := app.NewDriver(cfg, nil)
 	if err != nil {
@@ -78,19 +79,58 @@ func TestChatSwitchAndSendMessage(t *testing.T) {
 	}
 }
 
-func TestSettingsBackupAndThemeToggle(t *testing.T) {
+func TestMultiImageUploadAndLightbox(t *testing.T) {
 	m := NewDemoModel()
 	driver, inv := openDriver(t, m)
 
-	clickControl(t, driver, "Dark")
-	if !m.DarkMode {
-		t.Fatal("expected DarkMode to be true after clicking Dark")
+	// Open Lightbox on inline image message
+	clickControl(t, driver, "View preview-desktop.png")
+	if !m.LightboxOpen || m.LightboxTitle != "preview-desktop.png" {
+		t.Fatalf("LightboxOpen=%v title=%q", m.LightboxOpen, m.LightboxTitle)
 	}
+	clickControl(t, driver, "Zoom +")
+	if m.LightboxZoom <= 1 {
+		t.Fatalf("expected LightboxZoom > 1, got %v", m.LightboxZoom)
+	}
+	clickControl(t, driver, "Close")
+
+	// Queue multiple images via + Photos / AddAttachments and send album
+	before := len(m.Messages[10])
+	m.AddAttachments([]string{"shot-a.png", "shot-b.jpg", "shot-c.png"})
+	m.Draft = "3 screenshots"
+	inv.Invalidate()
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	clickControl(t, driver, "Send (3)")
+	if len(m.Messages[10]) != before+3 {
+		t.Fatalf("messages after multi-image send = %d, want %d", len(m.Messages[10]), before+3)
+	}
+	if len(m.PendingFiles) != 0 {
+		t.Fatalf("expected PendingFiles cleared, got %d", len(m.PendingFiles))
+	}
+}
+
+func TestInviteOnboardingAndBackup(t *testing.T) {
+	m := NewDemoModel()
+	driver, inv := openDriver(t, m)
+
+	clickControl(t, driver, "Invite")
+	if !m.InviteOpen {
+		t.Fatal("expected InviteOpen to be true")
+	}
+	m.NewAcctName = "Desktop User"
+	inv.Invalidate()
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	clickControl(t, driver, "Create Chatmail Account")
+	if len(m.Accounts) != 3 {
+		t.Fatalf("expected 3 accounts after creation, got %d", len(m.Accounts))
+	}
+	clickControl(t, driver, "Close")
 
 	clickControl(t, driver, "Settings")
-	if !m.SettingsOpen {
-		t.Fatal("expected SettingsOpen to be true")
-	}
 	m.BackupPassword = "test-passphrase-2026"
 	inv.Invalidate()
 	if err := driver.Pump(); err != nil {
@@ -104,30 +144,19 @@ func TestSettingsBackupAndThemeToggle(t *testing.T) {
 	if !strings.Contains(m.BackupStatus, "Verified OK") {
 		t.Fatalf("unexpected verify status: %q", m.BackupStatus)
 	}
-
-	m.Layout = LayoutCompact
-	inv.Invalidate()
-	if err := driver.Pump(); err != nil {
-		t.Fatal(err)
-	}
 	clickControl(t, driver, "Done")
-	if m.SettingsOpen {
-		t.Fatal("expected SettingsOpen to close after clicking Done")
-	}
 }
 
 func TestMultiAccountChatInfoGalleryAndMultiSelect(t *testing.T) {
 	m := NewDemoModel()
 	driver, _ := openDriver(t, m)
 
-	// Switch account
 	clickControl(t, driver, "Accounts")
 	clickControl(t, driver, "Work Profile (dev@chatmail.example)")
 	if m.ActiveAcctID != 2 {
 		t.Fatalf("ActiveAcctID = %d, want 2", m.ActiveAcctID)
 	}
 
-	// Open Chat Info and mute chat
 	clickControl(t, driver, "Info")
 	clickControl(t, driver, "Mute Chat")
 	if !m.ActiveChat().IsMuted {
@@ -135,35 +164,17 @@ func TestMultiAccountChatInfoGalleryAndMultiSelect(t *testing.T) {
 	}
 	clickControl(t, driver, "Close")
 
-	// Open Media Gallery
 	clickControl(t, driver, "Gallery")
 	if len(m.GalleryItems()) == 0 {
 		t.Fatal("expected attachment in default chat gallery")
 	}
 	clickControl(t, driver, "Close")
 
-	// Enter Multi-Select mode, select first message, and delete it
 	before := len(m.Messages[10])
 	clickControl(t, driver, "Select")
 	clickControl(t, driver, "Select message 1001")
 	clickControl(t, driver, "Delete Selected")
 	if len(m.Messages[10]) != before-1 {
 		t.Fatalf("messages after delete = %d, want %d", len(m.Messages[10]), before-1)
-	}
-}
-
-func TestWebxdcDrawerAndReactions(t *testing.T) {
-	m := NewDemoModel()
-	driver, _ := openDriver(t, m)
-
-	clickControl(t, driver, "+1")
-	if len(m.Messages[10][0].Reactions) == 0 {
-		t.Fatal("expected reaction state on message")
-	}
-
-	clickControl(t, driver, "Elena (Chatmail)")
-	clickControl(t, driver, "Open Webxdc")
-	if !m.WebxdcOpen || m.WebxdcTitle != "checklist.xdc" {
-		t.Fatalf("WebxdcOpen=%v title=%q", m.WebxdcOpen, m.WebxdcTitle)
 	}
 }

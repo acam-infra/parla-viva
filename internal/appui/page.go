@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 	"github.com/vivaui/viva/ui/message"
@@ -12,11 +13,11 @@ import (
 	"github.com/acam-infra/parla-viva/internal/dc"
 )
 
-// Page renders the complete Parla Viva desktop window using Viva's declarative ui.C API.
+// Page renders the Telegram-inspired desktop UI for Parla Viva.
 func (m *Model) Page(c ui.C) {
 	theme := c.Theme()
 
-	// Global keyboard shortcuts (mirroring Parla README shortcuts).
+	// Global keyboard shortcuts
 	if ui.Shortcut(c, ui.Primary, "k") {
 		m.QuickOpen = !m.QuickOpen
 		m.QuickQuery = ""
@@ -36,30 +37,47 @@ func (m *Model) Page(c ui.C) {
 		m.SettingsOpen = !m.SettingsOpen
 	}
 
-	ui.Column(c).Fill().Background(theme.Background).Children(func() {
-		if m.DemoMode {
-			ui.Row(c).FillWidth().PadX(14).PadY(6).Gap(10).Items(ui.Center).
-				Background(theme.Muted).Border(1, theme.Border).Children(func() {
-				ui.Text(c, "Offline Preview").FontSize(12).Bold().Color(theme.Primary).Shrink(0)
-				ui.Text(c, m.StatusText).FontSize(12).Muted().Grow(1).Ellipsis()
-				if ui.Button(c, "Settings").XSmall().Outline().Clicked() {
-					m.SettingsOpen = true
-				}
+	ui.Stack(c).Fill().Children(func() {
+		ui.Column(c).Fill().Background(theme.Background).Children(func() {
+			if m.DemoMode {
+				ui.Row(c).FillWidth().PadX(14).PadY(6).Gap(10).Items(ui.Center).
+					Background(theme.Muted).Border(1, theme.Border).Children(func() {
+					ui.Text(c, "Offline Preview").FontSize(12).Bold().Color(theme.Primary).Shrink(0)
+					ui.Text(c, m.StatusText).FontSize(12).Muted().Grow(1).Ellipsis()
+					if ui.Button(c, "Invite / Join").XSmall().Outline().Clicked() {
+						m.InviteOpen = true
+					}
+					if ui.Button(c, "Settings").XSmall().Ghost().Clicked() {
+						m.SettingsOpen = true
+					}
+				})
+			}
+
+			ui.Row(c).Fill().Grow(1).Children(func() {
+				m.sidebarPane(c)
+				ui.Splitter(c, &m.Split).Mins(260, 380).SplitterThickness(1)
+				m.conversationPane(c)
+			})
+		})
+
+		// Telegram-style drag-and-drop overlay indicator
+		if m.DragOver {
+			ui.Column(c).Fill().Center().Background(gfx.Color{Alpha: 0.45}).Children(func() {
+				ui.Column(c).Pad(28).Radius(14).Background(theme.Card).Border(2, theme.Primary).Dashed().Center().Gap(6).Children(func() {
+					ui.Text(c, "Drop images or files to send").FontSize(18).Bold().Color(theme.Primary)
+					ui.Text(c, "Supports multiple images (PNG, JPEG, GIF) and documents").FontSize(13).Muted()
+				})
 			})
 		}
-
-		ui.Row(c).Fill().Grow(1).Children(func() {
-			m.sidebarPane(c)
-			ui.Splitter(c, &m.Split).Mins(260, 380).SplitterThickness(1)
-			m.conversationPane(c)
-		})
 	})
 
-	// Overlays & modals
+	// Modals & Drawers
 	m.quickSwitcherModal(c)
+	m.inviteModal(c)
 	m.accountsModal(c)
 	m.chatInfoModal(c)
 	m.galleryModal(c)
+	m.lightboxModal(c)
 	m.settingsModal(c)
 	m.newChatModal(c)
 	m.webxdcDrawer(c)
@@ -73,7 +91,10 @@ func (m *Model) sidebarPane(c ui.C) {
 		ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
 			ui.Text(c, "Parla Viva").FontSize(16).Bold().Shrink(0)
 			ui.Spacer(c)
-			if ui.Button(c, "New").XSmall().Outline().Clicked() {
+			if ui.Button(c, "Invite").XSmall().Outline().Clicked() {
+				m.InviteOpen = true
+			}
+			if ui.Button(c, "New").XSmall().Ghost().Clicked() {
 				m.NewChatOpen = true
 			}
 			if ui.Button(c, "Quick").XSmall().Ghost().Clicked() {
@@ -111,8 +132,14 @@ func (m *Model) sidebarPane(c ui.C) {
 						avatarBg = theme.Primary
 						avatarFg = theme.PrimaryForeground
 					}
-					ui.Row(c).Size(40, 40).Radius(20).Shrink(0).Background(avatarBg).Center().Children(func() {
-						ui.Text(c, chat.Initials()).FontSize(11).Bold().Color(avatarFg)
+					ui.Stack(c).Size(40, 40).Shrink(0).Children(func() {
+						ui.Row(c).Size(40, 40).Radius(20).Background(avatarBg).Center().Children(func() {
+							ui.Text(c, chat.Initials()).FontSize(11).Bold().Color(avatarFg)
+						})
+						if chat.WasSeenRecently {
+							ui.Row(c).Absolute().Right(1).Bottom(1).Size(10, 10).Radius(5).
+								Background(theme.Success).Border(1.5, theme.Card)
+						}
 					})
 
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
@@ -120,9 +147,6 @@ func (m *Model) sidebarPane(c ui.C) {
 							title := chat.Name
 							if chat.IsPinned {
 								title = "* " + title
-							}
-							if chat.IsMuted {
-								title += " (muted)"
 							}
 							ui.Text(c, title).FontSize(13.5).Bold().Ellipsis().Grow(1)
 							if chat.UnreadCount > 0 {
@@ -145,6 +169,33 @@ func (m *Model) sidebarPane(c ui.C) {
 					id := chat.ID
 					c.After(func() { m.SelectChat(id) })
 				}
+				// Telegram-style right-click context menu on chat list rows
+				ui.ContextMenu(c, row, func(menu *ui.MenuItems) {
+					pinLabel := "Pin chat"
+					if chat.IsPinned {
+						pinLabel = "Unpin chat"
+					}
+					if menu.Item(pinLabel).Clicked() {
+						id := chat.ID
+						c.After(func() { m.TogglePinChat(id) })
+					}
+					muteLabel := "Mute notifications"
+					if chat.IsMuted {
+						muteLabel = "Unmute notifications"
+					}
+					if menu.Item(muteLabel).Clicked() {
+						id := chat.ID
+						c.After(func() { m.ToggleMuteChat(id) })
+					}
+					menu.Separator()
+					if menu.Item("Chat info").Clicked() {
+						id := chat.ID
+						c.After(func() {
+							m.SelectChat(id)
+							m.ChatInfoOpen = true
+						})
+					}
+				})
 			}
 		})
 
@@ -175,9 +226,12 @@ func (m *Model) conversationPane(c ui.C) {
 
 	ui.Column(c).Grow(1).FillHeight().Children(func() {
 		if activeChat == nil {
-			ui.Column(c).Fill().Center().Gap(8).Children(func() {
+			ui.Column(c).Fill().Center().Gap(10).Children(func() {
 				ui.Text(c, "Select a conversation").FontSize(18).Bold()
-				ui.Text(c, "Choose a chat on the left or press Ctrl+K to jump directly.").FontSize(13).Muted()
+				ui.Text(c, "Choose a chat on the left, press Ctrl+K, or pair with Parla via Invite / Join.").FontSize(13).Muted()
+				if ui.Button(c, "Invite / Join Chat").Small().Outline().Clicked() {
+					m.InviteOpen = true
+				}
 			})
 			return
 		}
@@ -219,7 +273,6 @@ func (m *Model) conversationPane(c ui.C) {
 			}
 		})
 
-		// Multi-select action bar (mirrors Parla keyboard/batch selection mode)
 		if m.Selecting {
 			selectedIDs := m.SelectedMessageIDs()
 			ui.Row(c).FillWidth().PadX(18).PadY(8).Gap(10).Items(ui.Center).
@@ -236,7 +289,6 @@ func (m *Model) conversationPane(c ui.C) {
 			})
 		}
 
-		// Pinned messages bar
 		if pinned := m.PinnedMessages(); len(pinned) > 0 {
 			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(8).Items(ui.Center).
 				Background(theme.Muted).Children(func() {
@@ -245,7 +297,6 @@ func (m *Model) conversationPane(c ui.C) {
 			})
 		}
 
-		// In-chat search bar (Ctrl+F)
 		if m.SearchOpen {
 			matches := m.SearchMatches()
 			ui.Row(c).FillWidth().PadX(18).PadY(8).Gap(8).Items(ui.Center).
@@ -284,7 +335,7 @@ func (m *Model) conversationPane(c ui.C) {
 			}
 		})
 
-		// Editing / Reply / Pending attachment bar above composer
+		// Editing / Reply banner
 		if m.EditingMsgID > 0 {
 			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(10).Items(ui.Center).
 				Background(theme.Muted).Children(func() {
@@ -305,27 +356,48 @@ func (m *Model) conversationPane(c ui.C) {
 				}
 			})
 		}
-		if m.PendingFile != "" {
-			ui.Row(c).FillWidth().PadX(18).PadY(6).Gap(10).Items(ui.Center).
-				Background(theme.Muted).Children(func() {
-				ui.Text(c, "Attachment: "+m.PendingFile).FontSize(12).Mono().Ellipsis().Grow(1)
-				if ui.Button(c, "Remove file").XSmall().Ghost().Clicked() {
-					m.PendingFile = ""
+
+		// Telegram-style horizontal multi-image / multi-file attachment strip
+		if len(m.PendingFiles) > 0 {
+			ui.Row(c).FillWidth().PadX(14).PadY(8).Gap(8).Items(ui.Center).
+				Background(theme.Muted).Border(1, theme.Border).Children(func() {
+				ui.Flow(c).Grow(1).Gap(8).LineGap(6).Children(func() {
+					for i := range m.PendingFiles {
+						idx := i
+						att := m.PendingFiles[idx]
+						ui.Row(c.KeyInt(idx)).Pad(6).Gap(6).Radius(8).
+							Background(theme.Card).Border(1, theme.Border).Items(ui.Center).Children(func() {
+							if att.IsImage && att.Bitmap.Width > 0 {
+								ui.Image(c, att.Bitmap).Size(36, 36).Radius(6)
+							}
+							ui.Text(c, att.Name).FontSize(12).Mono()
+							if ui.Button(c, "x").XSmall().Ghost().Clicked() {
+								c.After(func() { m.RemoveAttachment(idx) })
+							}
+						})
+					}
+				})
+				if ui.Button(c, "Clear all").XSmall().Ghost().Clicked() {
+					m.PendingFiles = nil
 				}
 			})
 		}
 
-		// Compose bar
+		// Compose bar with multi-image picker
 		ui.Row(c).FillWidth().Pad(12).Gap(8).Items(ui.Center).
 			Background(theme.Card).Border(1, theme.Border).Children(func() {
-			if ui.Button(c, "Attach").Small().Outline().Clicked() {
-				if paths, err := app.OpenFiles(app.OpenFileOptions{Title: "Attach file"}); err == nil && len(paths) > 0 {
-					m.PendingFile = paths[0]
+			if ui.Button(c, "+ Photos").Small().Outline().Clicked() {
+				opts := app.OpenFileOptions{
+					Title:         "Select images or files",
+					AllowMultiple: true,
+				}
+				if paths, err := app.OpenFiles(opts); err == nil && len(paths) > 0 {
+					m.AddAttachments(paths)
 				} else {
-					m.PendingFile = "release-notes.txt"
+					m.AddAttachments([]string{"photo-1.png", "photo-2.jpg"})
 				}
 			}
-			field := ui.TextField(c, &m.Draft, "Message", "Write a message...")
+			field := ui.TextField(c, &m.Draft, "Message", "Write a message or drop images...")
 			field.Grow(1)
 			if m.EnterToSend && field.Submitted() {
 				m.SendDraft()
@@ -333,8 +405,10 @@ func (m *Model) conversationPane(c ui.C) {
 			sendLabel := "Send"
 			if m.EditingMsgID > 0 {
 				sendLabel = "Save"
+			} else if len(m.PendingFiles) > 1 {
+				sendLabel = fmt.Sprintf("Send (%d)", len(m.PendingFiles))
 			}
-			canSend := strings.TrimSpace(m.Draft) != "" || m.PendingFile != ""
+			canSend := strings.TrimSpace(m.Draft) != "" || len(m.PendingFiles) > 0
 			if ui.Button(c, sendLabel).Disabled(!canSend).Clicked() {
 				m.SendDraft()
 			}
@@ -419,7 +493,8 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 		row = row.Start().Surface(ui.BubbleSecondary)
 	}
 
-	if msg.Quote != nil || msg.ViewType == "Webxdc" || msg.FileName != "" {
+	bmp, hasBmp := m.MessageBitmap(msg)
+	if msg.Quote != nil || msg.ViewType == "Webxdc" || msg.FileName != "" || hasBmp {
 		row = row.Content(func(cc ui.C) {
 			ui.Column(cc).Gap(6).Pad(10).Radius(10).MaxWidthPercent(75).
 				Background(bubbleBg(theme, msg.IsOutgoing)).Children(func() {
@@ -428,6 +503,18 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 						ui.Text(cc, msg.Quote.AuthorName).FontSize(11.5).Bold()
 						ui.Text(cc, msg.Quote.Text).FontSize(12).Muted().Ellipsis()
 					})
+				}
+				if hasBmp {
+					imgBox := ui.Row(cc).Size(240, 150).Radius(8).Clip().
+						Hit(ui.ID(cc), "View "+msg.FileName)
+					imgBox.Children(func() {
+						ui.Image(cc, bmp).Size(240, 150).Radius(8)
+					})
+					if imgBox.Clicked() {
+						title := msg.FileName
+						bCopy := bmp
+						cc.After(func() { m.OpenLightbox(title, bCopy) })
+					}
 				}
 				fg := theme.SecondaryForeground
 				if msg.IsOutgoing {
@@ -444,7 +531,7 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 							cc.After(func() { m.OpenWebxdcMessage(copied) })
 						}
 					})
-				} else if msg.FileName != "" {
+				} else if msg.FileName != "" && !hasBmp {
 					ui.Row(cc).Gap(8).Pad(6).Radius(6).Background(theme.Card).Items(ui.Center).Children(func() {
 						ui.Text(cc, "File: "+msg.FileName).FontSize(12).Mono()
 						if msg.FileBytes > 0 {
@@ -462,7 +549,44 @@ func (m *Model) renderMessage(c ui.C, msg dc.Message) {
 		m.messageExtras(ac, msg)
 	})
 
-	message.View(c.KeyInt(msg.ID), msg.DisplaySender(), row)
+	box := message.View(c.KeyInt(msg.ID), msg.DisplaySender(), row)
+	// Telegram-style right-click context menu on every message
+	ui.ContextMenu(c, box, func(menu *ui.MenuItems) {
+		if menu.Item("Reply").Clicked() {
+			copied := msg
+			c.After(func() { m.ReplyTo = &copied })
+		}
+		if menu.Item("React 👍").Clicked() {
+			c.After(func() { m.ToggleReaction(msg.ChatID, msg.ID, "👍") })
+		}
+		if menu.Item("React ❤️").Clicked() {
+			c.After(func() { m.ToggleReaction(msg.ChatID, msg.ID, "❤️") })
+		}
+		if msg.Text != "" {
+			if menu.Item("Copy text").Clicked() {
+				_ = app.SetClipboardText(msg.Text)
+			}
+		}
+		pinLabel := "Pin message"
+		if msg.IsPinned {
+			pinLabel = "Unpin message"
+		}
+		if menu.Item(pinLabel).Clicked() {
+			c.After(func() { m.TogglePinMessage(msg.ChatID, msg.ID) })
+		}
+		if msg.IsOutgoing {
+			if menu.Item("Edit").Clicked() {
+				c.After(func() {
+					m.EditingMsgID = msg.ID
+					m.Draft = msg.Text
+				})
+			}
+		}
+		menu.Separator()
+		if menu.Item("Delete").Destructive().Clicked() {
+			c.After(func() { m.DeleteMessageList(msg.ChatID, []int{msg.ID}) })
+		}
+	})
 }
 
 func (m *Model) messageExtras(c ui.C, msg dc.Message) {
@@ -501,6 +625,83 @@ func (m *Model) messageExtras(c ui.C, msg dc.Message) {
 					m.Draft = msg.Text
 				})
 			}
+		}
+	})
+}
+
+func (m *Model) inviteModal(c ui.C) {
+	if !m.InviteOpen {
+		return
+	}
+	ui.ModalWith(c, &m.InviteOpen, "Chatmail Account & Invite", ui.ModalSpec{Width: 520}, func() {
+		ui.Column(c).FillWidth().Gap(12).Children(func() {
+			ui.Text(c, "Pair with Parla / Delta Chat (SecureJoin)").FontSize(13.5).Bold()
+			ui.TextField(c, &m.JoinLinkInput, "Peer invite link", "https://i.delta.chat/#... or openpgp4fpr:...").FillWidth()
+			if ui.Button(c, "Join Chat").Small().Clicked() {
+				m.JoinViaInviteLink()
+			}
+
+			ui.Divider(c)
+			ui.Text(c, "Your Invite Link").FontSize(13.5).Bold()
+			inviteCopy := m.InviteLink
+			ui.TextField(c, &inviteCopy, "My invite link", "Not configured yet").FillWidth().ReadOnly(true)
+			if ui.Button(c, "Copy Invite Link").Small().Outline().Disabled(m.InviteLink == "").Clicked() {
+				m.CopyInviteLink()
+			}
+
+			ui.Divider(c)
+			ui.Text(c, "Create New Chatmail Account").FontSize(13.5).Bold()
+			ui.TextField(c, &m.NewAcctName, "Display name", "e.g. Parla Viva Desktop").FillWidth()
+			ui.TextField(c, &m.NewAcctRelay, "Chatmail relay", dc.DefaultChatmailRelay).FillWidth()
+			if ui.Button(c, "Create Chatmail Account").Small().Outline().Clicked() {
+				m.CreateNewChatmailAccount()
+			}
+			if m.OnboardStatus != "" {
+				ui.Wrap(c, m.OnboardStatus).FontSize(12).Muted()
+			}
+		})
+	}, func() {
+		if ui.Button(c, "Close").Clicked() {
+			m.InviteOpen = false
+		}
+	})
+}
+
+func (m *Model) lightboxModal(c ui.C) {
+	if !m.LightboxOpen {
+		return
+	}
+	title := m.LightboxTitle
+	if title == "" {
+		title = "Image Preview"
+	}
+	ui.ModalWith(c, &m.LightboxOpen, title, ui.ModalSpec{Width: 720}, func() {
+		ui.Column(c).FillWidth().Gap(10).Children(func() {
+			ui.Slot(c).FillWidth().Height(420).Draw(func(d *ui.DrawContext) {
+				components.PaintImageView(d.Canvas, *d.Theme, d.Rect, components.ImageViewOptions{
+					Bitmap: m.LightboxBitmap,
+					Zoom:   m.LightboxZoom,
+				})
+			})
+			ui.Row(c).FillWidth().Gap(8).Justify(ui.Center).Children(func() {
+				if ui.Button(c, "Fit").XSmall().Outline().Clicked() {
+					m.LightboxZoom = 0
+				}
+				if ui.Button(c, "100%").XSmall().Outline().Clicked() {
+					m.LightboxZoom = 1
+				}
+				if ui.Button(c, "Zoom +").XSmall().Outline().Clicked() {
+					if m.LightboxZoom == 0 {
+						m.LightboxZoom = 1.5
+					} else {
+						m.LightboxZoom = min(m.LightboxZoom+0.5, 4)
+					}
+				}
+			})
+		})
+	}, func() {
+		if ui.Button(c, "Close").Clicked() {
+			m.LightboxOpen = false
 		}
 	})
 }
@@ -553,6 +754,11 @@ func (m *Model) accountsModal(c ui.C) {
 					c.After(func() { m.SwitchAccount(id) })
 				}
 			}
+			ui.Divider(c)
+			if ui.Button(c, "+ Add Chatmail Account").Small().Outline().FillWidth().Clicked() {
+				m.AccountsOpen = false
+				m.InviteOpen = true
+			}
 		})
 	}, func() {
 		if ui.Button(c, "Close").Outline().Clicked() {
@@ -604,7 +810,7 @@ func (m *Model) galleryModal(c ui.C) {
 	if !m.GalleryOpen {
 		return
 	}
-	ui.ModalWith(c, &m.GalleryOpen, "Media & Files Gallery", ui.ModalSpec{Width: 500}, func() {
+	ui.ModalWith(c, &m.GalleryOpen, "Media & Files Gallery", ui.ModalSpec{Width: 520}, func() {
 		ui.Column(c).FillWidth().Gap(12).Children(func() {
 			ui.Tabs(c, &m.GalleryTab, GalleryTabs, nil)
 			items := m.GalleryItems()
@@ -618,7 +824,16 @@ func (m *Model) galleryModal(c ui.C) {
 					Background(c.Theme().Muted).Items(ui.Center).Children(func() {
 					ui.Text(c, it.ViewType).FontSize(11.5).Bold().Color(c.Theme().Primary)
 					ui.Text(c, it.FileName).FontSize(13).Mono().Grow(1).Ellipsis()
-					if it.ViewType == "Webxdc" {
+					if bmp, ok := m.MessageBitmap(it); ok {
+						if ui.Button(c, "View").XSmall().Outline().Clicked() {
+							title := it.FileName
+							bCopy := bmp
+							c.After(func() {
+								m.GalleryOpen = false
+								m.OpenLightbox(title, bCopy)
+							})
+						}
+					} else if it.ViewType == "Webxdc" {
 						if ui.Button(c, "Launch").XSmall().Outline().Clicked() {
 							copied := it
 							c.After(func() {

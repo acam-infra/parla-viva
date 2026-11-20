@@ -64,6 +64,7 @@ func main() {
 		Web:         webHost,
 		Invalidator: inv,
 		OnWake:      model.DrainUpdates,
+		OnFileDrop:  model.HandleFileDrop,
 	})
 
 	if err := app.RunCanvas(cfg, new(gfx.Canvas)); err != nil {
