@@ -51,3 +51,33 @@ go build -trimpath -ldflags="-s -w" -o build/parla-viva ./cmd/parla-viva
 ## License
 
 Apache License 2.0. Inspired by and migrating architecture from [trufae/parla](https://github.com/trufae/parla), built on [vivaui/viva](https://github.com/vivaui/viva).
+
+## Agent CLI & Local IPC Bridge (`v0.4.0`)
+
+`parla-viva` ships with a built-in Agent CLI designed for both human terminals and AI agents:
+- **Zero lock conflicts with GUI**: When the desktop GUI (or `parla-viva serve`) is running, it binds an authenticated localhost IPC bridge (`127.0.0.1`, descriptor stored at `<accountsDir>/.parla-viva-ipc.json` with mode `0600`). CLI commands automatically route through the live bridge so you can query chats, send messages/files, and stream events while the GUI stays open and updates in real time. When no GUI is running (or `--direct` is passed), the CLI automatically launches `deltachat-rpc-server` directly.
+- **Machine-readable `--json` / NDJSON output** on every command.
+
+```bash
+# Check RPC server, IPC bridge status, and accounts
+parla-viva doctor --json
+
+# List accounts & chats
+parla-viva accounts list --json
+parla-viva chats list --json
+
+# Read recent messages or search
+parla-viva messages --chat 12 --limit 20 --json
+
+# Send text (or stdin with --text -), multiple files/images, or reply
+parla-viva send --chat 12 --text "Hello from Agent CLI" --json
+parla-viva send --to user@nine.testrun.org --text "Report attached" --file ./chart.png --file ./data.csv --json
+
+# Join via SecureJoin link & wait for the next incoming reply (NDJSON)
+parla-viva join --link "https://i.delta.chat/#..." --json
+parla-viva watch --chat 12 --incoming --once --timeout 60s --json
+
+# Inspect any common file format or manage AES-256-GCM SafeStore backups
+parla-viva preview ./data.csv --json
+parla-viva backup create --out ./backup.pvbackup --passphrase "..." --json
+```

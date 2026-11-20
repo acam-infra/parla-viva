@@ -44,6 +44,7 @@ type Model struct {
 	WebView      *app.WebView
 	WebReady     bool
 	AccountsPath string
+	OnEvent      func(dc.Event)
 	DemoMode     bool
 	StatusText   string
 
@@ -679,6 +680,9 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 			ev, err := m.Client.GetNextEvent(ctx)
 			if err != nil {
 				return
+			}
+			if m.OnEvent != nil {
+				m.OnEvent(ev)
 			}
 			switch ev.Event.Kind {
 			case "IncomingMsg", "MsgsChanged", "MsgDelivered", "MsgRead", "ReactionsChanged":

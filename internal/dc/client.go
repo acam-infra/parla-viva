@@ -8,18 +8,31 @@ import (
 	"strconv"
 )
 
-// Client provides typed Delta Chat JSON-RPC methods on top of Transport.
+// Client provides typed Delta Chat JSON-RPC methods on top of a Caller
+// (either a direct *Transport or a local *IPCClient).
 type Client struct {
+	caller    Caller
 	transport *Transport
 	accountID int
 }
 
-// NewClient wraps an existing Transport.
+// NewClient wraps an existing direct Transport.
 func NewClient(transport *Transport) *Client {
-	return &Client{transport: transport}
+	return &Client{caller: transport, transport: transport}
 }
 
-// Transport exposes the underlying JSON-RPC transport.
+// NewClientWithCaller wraps any Caller implementation (such as *IPCClient).
+func NewClientWithCaller(caller Caller) *Client {
+	t, _ := caller.(*Transport)
+	return &Client{caller: caller, transport: t}
+}
+
+// Caller exposes the underlying JSON-RPC caller.
+func (c *Client) Caller() Caller {
+	return c.caller
+}
+
+// Transport exposes the underlying direct stdio transport (nil when using IPC).
 func (c *Client) Transport() *Transport {
 	return c.transport
 }
@@ -36,7 +49,7 @@ func (c *Client) SetAccountID(id int) {
 
 // GetAllAccounts returns all accounts known to deltachat-rpc-server.
 func (c *Client) GetAllAccounts(ctx context.Context) ([]Account, error) {
-	raw, err := c.transport.Call(ctx, "get_all_accounts", []any{})
+	raw, err := c.caller.Call(ctx, "get_all_accounts", []any{})
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +62,7 @@ func (c *Client) GetAllAccounts(ctx context.Context) ([]Account, error) {
 
 // SelectAccount selects the active account on the RPC server.
 func (c *Client) SelectAccount(ctx context.Context, accountID int) error {
-	if _, err := c.transport.Call(ctx, "select_account", []any{accountID}); err != nil {
+	if _, err := c.caller.Call(ctx, "select_account", []any{accountID}); err != nil {
 		return err
 	}
 	c.accountID = accountID
@@ -58,7 +71,7 @@ func (c *Client) SelectAccount(ctx context.Context, accountID int) error {
 
 // StartIOForAllAccounts starts network I/O across all configured accounts.
 func (c *Client) StartIOForAllAccounts(ctx context.Context) error {
-	_, err := c.transport.Call(ctx, "start_io_for_all_accounts", []any{})
+	_, err := c.caller.Call(ctx, "start_io_for_all_accounts", []any{})
 	return err
 }
 
@@ -68,7 +81,7 @@ func (c *Client) GetChatlistEntries(ctx context.Context, accountID int, listFlag
 	if query != "" {
 		q = query
 	}
-	raw, err := c.transport.Call(ctx, "get_chatlist_entries", []any{accountID, listFlags, q, nil})
+	raw, err := c.caller.Call(ctx, "get_chatlist_entries", []any{accountID, listFlags, q, nil})
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +97,7 @@ func (c *Client) GetChatlistItems(ctx context.Context, accountID int, chatIDs []
 	if len(chatIDs) == 0 {
 		return nil, nil
 	}
-	raw, err := c.transport.Call(ctx, "get_chatlist_items_by_entries", []any{accountID, chatIDs})
+	raw, err := c.caller.Call(ctx, "get_chatlist_items_by_entries", []any{accountID, chatIDs})
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +118,7 @@ func (c *Client) GetChatlistItems(ctx context.Context, accountID int, chatIDs []
 
 // GetMessageIDs returns all message IDs for a chat in chronological order.
 func (c *Client) GetMessageIDs(ctx context.Context, accountID, chatID int) ([]int, error) {
-	raw, err := c.transport.Call(ctx, "get_message_ids", []any{accountID, chatID, false, false})
+	raw, err := c.caller.Call(ctx, "get_message_ids", []any{accountID, chatID, false, false})
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +134,7 @@ func (c *Client) GetMessages(ctx context.Context, accountID int, msgIDs []int) (
 	if len(msgIDs) == 0 {
 		return nil, nil
 	}
-	raw, err := c.transport.Call(ctx, "get_messages", []any{accountID, msgIDs})
+	raw, err := c.caller.Call(ctx, "get_messages", []any{accountID, msgIDs})
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +161,7 @@ func (c *Client) SendTextMessage(ctx context.Context, accountID, chatID int, tex
 	if quotedMsgID > 0 {
 		data["quotedMessageId"] = quotedMsgID
 	}
-	raw, err := c.transport.Call(ctx, "send_msg", []any{accountID, chatID, data})
+	raw, err := c.caller.Call(ctx, "send_msg", []any{accountID, chatID, data})
 	if err != nil {
 		return 0, err
 	}
@@ -161,13 +174,13 @@ func (c *Client) SendTextMessage(ctx context.Context, accountID, chatID int, tex
 
 // SendReaction adds or replaces the user's emoji reaction on a message.
 func (c *Client) SendReaction(ctx context.Context, accountID, msgID int, emojis ...string) error {
-	_, err := c.transport.Call(ctx, "send_reaction", []any{accountID, msgID, emojis})
+	_, err := c.caller.Call(ctx, "send_reaction", []any{accountID, msgID, emojis})
 	return err
 }
 
 // ResendMessages retries failed outgoing messages (mirrors Parla CORE-003).
 func (c *Client) ResendMessages(ctx context.Context, accountID int, msgIDs []int) error {
-	_, err := c.transport.Call(ctx, "resend_messages", []any{accountID, msgIDs})
+	_, err := c.caller.Call(ctx, "resend_messages", []any{accountID, msgIDs})
 	return err
 }
 
@@ -176,7 +189,7 @@ func (c *Client) MarkSeenMsgs(ctx context.Context, accountID int, msgIDs []int) 
 	if len(msgIDs) == 0 {
 		return nil
 	}
-	_, err := c.transport.Call(ctx, "markseen_msgs", []any{accountID, msgIDs})
+	_, err := c.caller.Call(ctx, "markseen_msgs", []any{accountID, msgIDs})
 	return err
 }
 
@@ -186,7 +199,7 @@ func (c *Client) SearchMessages(ctx context.Context, accountID int, chatID int, 
 	if chatID > 0 {
 		cid = chatID
 	}
-	raw, err := c.transport.Call(ctx, "search_messages", []any{accountID, query, cid})
+	raw, err := c.caller.Call(ctx, "search_messages", []any{accountID, query, cid})
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +212,7 @@ func (c *Client) SearchMessages(ctx context.Context, accountID int, chatID int, 
 
 // GetNextEvent blocks until the next core event arrives.
 func (c *Client) GetNextEvent(ctx context.Context) (Event, error) {
-	raw, err := c.transport.Call(ctx, "get_next_event", []any{})
+	raw, err := c.caller.Call(ctx, "get_next_event", []any{})
 	if err != nil {
 		return Event{}, err
 	}
@@ -212,7 +225,7 @@ func (c *Client) GetNextEvent(ctx context.Context) (Event, error) {
 
 // GetWebxdcBlob fetches a file from a Webxdc attachment via core RPC.
 func (c *Client) GetWebxdcBlob(ctx context.Context, accountID, msgID int, path string) ([]byte, error) {
-	raw, err := c.transport.Call(ctx, "get_webxdc_blob", []any{accountID, msgID, path})
+	raw, err := c.caller.Call(ctx, "get_webxdc_blob", []any{accountID, msgID, path})
 	if err != nil {
 		return nil, err
 	}
