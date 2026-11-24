@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -109,9 +110,13 @@ func main() {
 		model.WebReady = true
 	}
 
+	var quitting atomic.Bool
+	var hasStatusItem atomic.Bool
+
 	var statusMu sync.Mutex
 	var statusItem *app.StatusItem
 	removeStatusItem := func() {
+		hasStatusItem.Store(false)
 		statusMu.Lock()
 		item := statusItem
 		statusItem = nil
@@ -123,6 +128,16 @@ func main() {
 
 	var appMu sync.Mutex
 	var activeApp *app.Application
+	var mainWinMu sync.Mutex
+	var mainWin *app.Window
+	showMainWindow := func() {
+		mainWinMu.Lock()
+		w := mainWin
+		mainWinMu.Unlock()
+		if w != nil {
+			w.Show()
+		}
+	}
 
 	var cleanupOnce sync.Once
 	cleanup := func(reason string) {
@@ -167,6 +182,7 @@ func main() {
 	}
 
 	requestExit := func(reason string, allow func()) {
+		quitting.Store(true)
 		removeStatusItem()
 		cleanupWithTimeout(reason, 800*time.Millisecond)
 		scheduleFailsafeExit(1200 * time.Millisecond)
@@ -212,6 +228,22 @@ func main() {
 		OnWake:      model.DrainUpdates,
 		OnFileDrop:  model.HandleFileDrop,
 		OnActivate:  model.WakeNetwork,
+		OnCloseRequest: func(allow func()) {
+			// Default Telegram-style behavior: hide window to taskbar tray / menu bar
+			// when a status area is available; explicit Quit or tray-less desktops exit normally.
+			if quitting.Load() || !hasStatusItem.Load() {
+				allow()
+				return
+			}
+			mainWinMu.Lock()
+			w := mainWin
+			mainWinMu.Unlock()
+			if w != nil {
+				w.Hide()
+				return
+			}
+			allow()
+		},
 		OnClosed: func() {
 			requestExit("window_closed", nil)
 		},
@@ -225,11 +257,17 @@ func main() {
 		application.OnQuitRequest(func(allow func()) {
 			requestExit("quit_request", allow)
 		})
+		application.OnReopen(func() {
+			showMainWindow()
+		})
 
 		win, err := application.OpenWindow(cfg, new(gfx.Canvas))
 		if err != nil {
 			return err
 		}
+		mainWinMu.Lock()
+		mainWin = win
+		mainWinMu.Unlock()
 
 		if trayIconErr == nil && trayIcon.Size > 0 {
 			item, serr := application.AddStatusItem(app.StatusItemConfig{
@@ -239,7 +277,7 @@ func main() {
 					RGBA: trayIcon.RGBA,
 				},
 				OnClick: func(_ app.StatusClick) {
-					win.Show()
+					showMainWindow()
 				},
 				Menu: func() []app.MenuItem {
 					return []app.MenuItem{
@@ -247,7 +285,7 @@ func main() {
 							ID:    "show",
 							Title: "Show Parla Viva",
 							OnSelect: func() {
-								win.Show()
+								showMainWindow()
 							},
 						},
 						{Separator: true},
@@ -265,6 +303,7 @@ func main() {
 				statusMu.Lock()
 				statusItem = item
 				statusMu.Unlock()
+				hasStatusItem.Store(true)
 			}
 		}
 
