@@ -319,3 +319,29 @@ func TestDragDropHoverThrottlingSizePreviewAndEscape(t *testing.T) {
 		t.Fatalf("expected preview modal open for spec.md, got open=%v doc=%+v", m.PreviewOpen, m.PreviewDoc)
 	}
 }
+
+func TestTelegramStyleMuteToggleAndSidebarAlignment(t *testing.T) {
+	m := NewDemoModel()
+	driver, inv := openDriver(t, m)
+
+	if m.ActiveChat().IsMuted {
+		t.Fatal("expected initial active chat to be unmuted")
+	}
+	clickControl(t, driver, "Mute")
+	inv.Invalidate()
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.ActiveChat().IsMuted {
+		t.Fatal("expected header Mute button to mute active chat")
+	}
+	// Clicking Unmute restores unmuted state
+	clickControl(t, driver, "Unmute")
+	inv.Invalidate()
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	if m.ActiveChat().IsMuted {
+		t.Fatal("expected header Unmute button to unmute active chat")
+	}
+}

@@ -67,6 +67,30 @@ func (c ChatEntry) Initials() string {
 	return initialsFromName(c.Name)
 }
 
+// ShortTimeLabel formats the chat's last-activity timestamp like Telegram Desktop
+// (HH:MM today, "Yesterday", weekday within 6 days, or "Jan 2" for older chats).
+func (c ChatEntry) ShortTimeLabel() string {
+	if c.Timestamp <= 0 {
+		return ""
+	}
+	t := time.Unix(c.Timestamp, 0).Local()
+	now := time.Now().Local()
+	ty, tm, td := t.Date()
+	ny, nm, nd := now.Date()
+	if ty == ny && tm == nm && td == nd {
+		return t.Format("15:04")
+	}
+	yest := now.AddDate(0, 0, -1)
+	yy, ym, yd := yest.Date()
+	if ty == yy && tm == ym && td == yd {
+		return "Yesterday"
+	}
+	if now.Sub(t) > 0 && now.Sub(t) < 6*24*time.Hour {
+		return t.Format("Mon")
+	}
+	return t.Format("Jan 2")
+}
+
 // Reaction aggregates an emoji reaction on a message.
 type Reaction struct {
 	Emoji   string

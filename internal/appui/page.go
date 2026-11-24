@@ -198,19 +198,20 @@ func (m *Model) sidebarPane(c ui.C) {
 						}
 					})
 
-					ui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
+					ui.Column(c).Grow(1).MinWidth(0).Clip().Gap(3).Children(func() {
+						// Telegram-style Row 1: Chat name + inline mute bell + right-aligned timestamp
 						ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
-							title := chat.Name
-							if chat.IsPinned {
-								title = "* " + title
-							}
-							ui.Text(c, title).FontSize(13.5).Bold().Ellipsis().Grow(1)
-							if chat.UnreadCount > 0 {
-								ui.Row(c).Shrink(0).MinWidth(22).PadX(6).PadY(2).Radius(10).Center().Background(theme.Primary).Children(func() {
-									ui.Text(c, fmt.Sprintf("%d", chat.UnreadCount)).FontSize(11).Bold().Color(theme.PrimaryForeground)
-								})
+							ui.Row(c).Grow(1).MinWidth(0).Gap(4).Items(ui.Center).Children(func() {
+								ui.Text(c, chat.Name).FontSize(13.5).Bold().Ellipsis().Shrink(1)
+								if chat.IsMuted {
+									ui.Icon(c, IconBellOff).Size(12.5, 12.5).Color(theme.MutedForeground)
+								}
+							})
+							if ts := chat.ShortTimeLabel(); ts != "" {
+								ui.Text(c, ts).FontSize(11).Muted().Shrink(0)
 							}
 						})
+						// Telegram-style Row 2: Message preview + right-aligned pin icon & muted/active unread badge
 						previewLine := chat.LastMessage
 						if chat.SummaryPrefix != "" {
 							previewLine = chat.SummaryPrefix + ": " + previewLine
@@ -218,7 +219,31 @@ func (m *Model) sidebarPane(c ui.C) {
 						if previewLine == "" {
 							previewLine = "No messages yet"
 						}
-						ui.Text(c, previewLine).FontSize(12).Muted().Ellipsis()
+						ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
+							ui.Text(c, previewLine).FontSize(12).Muted().Ellipsis().Grow(1)
+							if chat.IsPinned || chat.UnreadCount > 0 {
+								ui.Row(c).Shrink(0).Gap(5).Items(ui.Center).Children(func() {
+									if chat.IsPinned {
+										ui.Icon(c, IconPin).Size(12.5, 12.5).Color(theme.MutedForeground)
+									}
+									if chat.UnreadCount > 0 {
+										badgeBg := theme.Primary
+										badgeFg := theme.PrimaryForeground
+										if chat.IsMuted {
+											badgeBg = theme.Secondary
+											badgeFg = theme.MutedForeground
+										}
+										badge := ui.Row(c).Shrink(0).MinWidth(20).Height(20).PadX(6).Radius(10).Center().Background(badgeBg)
+										if chat.IsMuted {
+											badge = badge.Border(1, theme.Border)
+										}
+										badge.Children(func() {
+											ui.Text(c, fmt.Sprintf("%d", chat.UnreadCount)).FontSize(11).Bold().Color(badgeFg)
+										})
+									}
+								})
+							}
+						})
 					})
 				})
 				if row.Clicked() {
@@ -304,8 +329,13 @@ func (m *Model) conversationPane(c ui.C) {
 			ui.Row(c).Size(36, 36).Radius(18).Shrink(0).Background(theme.Secondary).Center().Children(func() {
 				ui.Text(c, activeChat.Initials()).FontSize(12).Bold()
 			})
-			ui.Column(c).Grow(1).Gap(1).Children(func() {
-				ui.Text(c, activeChat.Name).FontSize(15).Bold().Ellipsis()
+			ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
+					ui.Text(c, activeChat.Name).FontSize(15).Bold().Ellipsis().Shrink(1)
+					if activeChat.IsMuted {
+						ui.Icon(c, IconBellOff).Size(14, 14).Color(theme.MutedForeground)
+					}
+				})
 				meta := activeChat.ChatType
 				if meta == "" {
 					meta = "Encrypted"
@@ -314,10 +344,20 @@ func (m *Model) conversationPane(c ui.C) {
 					meta += " · Active recently"
 				}
 				if activeChat.IsMuted {
-					meta += " · Muted"
+					meta += " · Notifications muted"
 				}
-				ui.Text(c, meta).FontSize(12).Muted()
+				ui.Text(c, meta).FontSize(12).Muted().Ellipsis()
 			})
+			muteBtnLabel := "Mute"
+			muteBtnIcon := IconBell
+			if activeChat.IsMuted {
+				muteBtnLabel = "Unmute"
+				muteBtnIcon = IconBellOff
+			}
+			if iconBtn(c, muteBtnLabel, muteBtnIcon, true).Clicked() {
+				id := activeChat.ID
+				c.After(func() { m.ToggleMuteChat(id) })
+			}
 			if iconBtn(c, "Find", IconSearch, true).Clicked() {
 				m.SearchOpen = !m.SearchOpen
 			}
@@ -331,6 +371,14 @@ func (m *Model) conversationPane(c ui.C) {
 			ui.Menu(c, moreBtn, &m.MoreMenuOpen, func(menu *ui.MenuItems) {
 				if menu.Item("Chat Info").Clicked() {
 					m.ChatInfoOpen = true
+				}
+				muteMenuLabel := "Mute notifications"
+				if activeChat.IsMuted {
+					muteMenuLabel = "Unmute notifications"
+				}
+				if menu.Item(muteMenuLabel).Clicked() {
+					id := activeChat.ID
+					c.After(func() { m.ToggleMuteChat(id) })
 				}
 				if menu.Item("Select Messages").Clicked() {
 					m.Selecting = !m.Selecting

@@ -135,4 +135,40 @@ var (
 		gfx.MoveTo(12, 12), gfx.LineTo(12, 21),
 		gfx.MoveTo(12, 12), gfx.LineTo(4, 7.5),
 	)
+
+	// IconBell is a notification bell glyph for unmuted chats.
+	IconBell = lucideIcon(
+		gfx.MoveTo(6, 8),
+		gfx.CubicTo(6, 4.69, 8.69, 2, 12, 2),
+		gfx.CubicTo(15.31, 2, 18, 4.69, 18, 8),
+		gfx.CubicTo(18, 13, 20, 15, 21, 16),
+		gfx.LineTo(3, 16),
+		gfx.CubicTo(4, 15, 6, 13, 6, 8),
+		gfx.MoveTo(10.3, 21),
+		gfx.QuadTo(12, 22.5, 13.7, 21),
+	)
+
+	// IconBellOff is a crossed-out notification bell glyph for muted chats.
+	IconBellOff = lucideIcon(
+		gfx.MoveTo(8.7, 3),
+		gfx.CubicTo(9.7, 2.35, 10.82, 2, 12, 2),
+		gfx.CubicTo(15.31, 2, 18, 4.69, 18, 8),
+		gfx.CubicTo(18, 10.2, 18.4, 11.9, 19.1, 13.2),
+		gfx.MoveTo(6.26, 6.26),
+		gfx.CubicTo(6.09, 6.81, 6, 7.4, 6, 8),
+		gfx.CubicTo(6, 13, 4, 15, 3, 16),
+		gfx.LineTo(16, 16),
+		gfx.MoveTo(10.3, 21),
+		gfx.QuadTo(12, 22.5, 13.7, 21),
+		gfx.MoveTo(2, 2), gfx.LineTo(22, 22),
+	)
+
+	// IconPin is a compact pushpin glyph for pinned chats.
+	IconPin = lucideIcon(
+		gfx.MoveTo(12, 17), gfx.LineTo(12, 22),
+		gfx.MoveTo(5, 17), gfx.LineTo(19, 17),
+		gfx.LineTo(17, 11), gfx.LineTo(17, 5),
+		gfx.LineTo(18, 3), gfx.LineTo(6, 3),
+		gfx.LineTo(7, 5), gfx.LineTo(7, 11), gfx.ClosePath(),
+	)
 )
