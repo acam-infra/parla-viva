@@ -80,10 +80,24 @@ func (m *Model) Page(c ui.C) {
 		})
 
 		if m.DragOver {
-			ui.Column(c).Fill().Center().Background(gfx.Color{Alpha: 0.45}).Children(func() {
-				ui.Column(c).Pad(28).Radius(14).Background(theme.Card).Border(2, theme.Primary).Dashed().Center().Gap(6).Children(func() {
-					ui.Text(c, "Drop images or files to send").FontSize(18).Bold().Color(theme.Primary)
-					ui.Text(c, "Supports multiple images, Markdown, JSON, CSV, code, ZIP & vCard").FontSize(13).Muted()
+			backdropAlpha := float32(0.32)
+			if m.DarkMode {
+				backdropAlpha = 0.56
+			}
+			targetTitle := "Drop images or files to send"
+			if chat := m.ActiveChat(); chat != nil && strings.TrimSpace(chat.Name) != "" {
+				targetTitle = "Drop to send to " + chat.Name
+			}
+			ui.Column(c).Fill().Center().Background(gfx.Color{Alpha: backdropAlpha}).Children(func() {
+				ui.Column(c).Width(430).Pad(28).Radius(18).Background(theme.Card).Border(2, theme.Primary).Dashed().Center().Gap(10).Children(func() {
+					ui.Row(c).Size(52, 52).Radius(26).Background(theme.Accent).Center().Children(func() {
+						ui.Icon(c, IconPaperclip).Size(24, 24).Color(theme.Primary)
+					})
+					ui.Text(c, targetTitle).FontSize(17.5).Bold().Color(theme.Primary).Ellipsis()
+					ui.Text(c, "Images, folders, Markdown, JSON, CSV, code, ZIP & vCard").FontSize(12.5).Muted()
+					ui.Row(c).PadX(12).PadY(4).Radius(999).Background(theme.Muted).Children(func() {
+						ui.Text(c, "Release to attach · Press Esc to cancel").FontSize(11.5).Muted()
+					})
 				})
 			})
 		}
@@ -130,6 +144,11 @@ func (m *Model) sidebarPane(c ui.C) {
 				if menu.Item("Quick Switch Chat (Ctrl+K)").Clicked() {
 					m.QuickOpen = true
 					m.QuickQuery = ""
+				}
+				if m.OnQuit != nil {
+					if menu.Item("Quit Parla Viva").Clicked() {
+						m.OnQuit()
+					}
 				}
 			})
 			if iconBtn(c, "Settings", IconSettings, true).Clicked() {
@@ -424,39 +443,67 @@ func (m *Model) conversationPane(c ui.C) {
 			})
 		}
 
-		// Multi-image / multi-file attachment preview strip
+		// Multi-image / multi-file attachment staging tray (bounded height, click-to-preview)
 		if len(m.PendingFiles) > 0 {
-			ui.Row(c).FillWidth().PadX(14).PadY(8).Gap(8).Items(ui.Center).
+			summary := fmt.Sprintf("%d file(s) staged", len(m.PendingFiles))
+			if total := m.PendingTotalBytes(); total > 0 {
+				summary += " · " + formatBytesShort(total)
+			}
+			ui.Column(c).FillWidth().PadX(14).PadY(8).Gap(6).
 				Background(theme.Muted).Border(1, theme.Border).Children(func() {
-				ui.Flow(c).Grow(1).Gap(8).LineGap(6).Children(func() {
-					for i := range m.PendingFiles {
-						idx := i
-						att := m.PendingFiles[idx]
-						kind := preview.DetectKind(att.Name)
-						ui.Row(c.KeyInt(idx)).MaxWidth(210).Pad(6).Gap(8).Radius(10).
-							Background(theme.Card).Border(1, theme.Border).Items(ui.Center).Children(func() {
-							if att.IsImage && att.Bitmap.Width > 0 {
-								ui.Image(c, att.Bitmap).Size(34, 34).Radius(7)
-							} else {
-								ui.Row(c).Size(34, 34).Radius(7).Shrink(0).Background(theme.Secondary).Center().Children(func() {
-									ui.Icon(c, fileKindIcon(kind)).Size(16, 16).Color(theme.Primary)
-								})
-							}
-							ui.Column(c).Grow(1).Gap(1).Children(func() {
-								ui.Text(c, att.Name).FontSize(12).Bold().Ellipsis()
-								ui.Text(c, string(kind)).FontSize(10.5).Muted()
-							})
-							if ui.ButtonBase(c, "Remove attachment").Size(22, 22).Radius(6).Ghost().Center().Shrink(0).Children(func() {
-								ui.Icon(c, IconClose).Size(12, 12).Color(theme.MutedForeground)
-							}).Clicked() {
-								c.After(func() { m.RemoveAttachment(idx) })
-							}
-						})
+				ui.Row(c).FillWidth().Gap(8).Items(ui.Center).Children(func() {
+					ui.Icon(c, IconPaperclip).Size(13, 13).Color(theme.Primary)
+					ui.Text(c, summary).FontSize(11.5).Bold().Color(theme.Foreground).Shrink(0)
+					ui.Text(c, "Click any item to preview").FontSize(11).Muted().Grow(1).Ellipsis()
+					if ui.Button(c, "+ Add").XSmall().Outline().Clicked() {
+						opts := app.OpenFileOptions{
+							Title:         "Select files to send",
+							AllowMultiple: true,
+						}
+						c.After(func() { m.PickAttachments(opts, nil) })
+					}
+					if ui.Button(c, "Clear all").XSmall().Ghost().Clicked() {
+						m.PendingFiles = nil
 					}
 				})
-				if ui.Button(c, "Clear all").XSmall().Ghost().Clicked() {
-					m.PendingFiles = nil
-				}
+				ui.Scroll(c).FillWidth().MaxHeight(140).Scrollbars().Children(func() {
+					ui.Flow(c).FillWidth().Gap(8).LineGap(6).Children(func() {
+						for i := range m.PendingFiles {
+							idx := i
+							att := m.PendingFiles[idx]
+							kind := preview.DetectKind(att.Name)
+							meta := string(kind)
+							if sz := formatBytesShort(att.Size); sz != "" {
+								meta += " · " + sz
+							}
+							ui.Row(c.KeyInt(idx)).MaxWidth(240).Pad(6).Gap(8).Radius(10).
+								Background(theme.Card).Border(1, theme.Border).Items(ui.Center).Children(func() {
+								previewBtn := ui.ButtonBase(c, "Preview "+att.Name).Grow(1).MinWidth(0).Radius(8).Ghost().Gap(8).Items(ui.Center).Children(func() {
+									if att.IsImage && att.Bitmap.Width > 0 {
+										ui.Image(c, att.Bitmap).Size(44, 44).Radius(8)
+									} else {
+										ui.Row(c).Size(44, 44).Radius(8).Shrink(0).Background(theme.Secondary).Center().Children(func() {
+											ui.Icon(c, fileKindIcon(kind)).Size(18, 18).Color(theme.Primary)
+										})
+									}
+									ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+										ui.Text(c, att.Name).FontSize(12).Bold().Ellipsis()
+										ui.Text(c, meta).FontSize(10.5).Muted().Ellipsis()
+									})
+								})
+								if previewBtn.Clicked() {
+									attCopy := att
+									c.After(func() { m.OpenPreviewForPending(attCopy) })
+								}
+								if ui.ButtonBase(c, "Remove attachment").Size(22, 22).Radius(6).Ghost().Center().Shrink(0).Children(func() {
+									ui.Icon(c, IconClose).Size(12, 12).Color(theme.MutedForeground)
+								}).Clicked() {
+									c.After(func() { m.RemoveAttachment(idx) })
+								}
+							})
+						}
+					})
+				})
 			})
 		}
 
@@ -469,22 +516,17 @@ func (m *Model) conversationPane(c ui.C) {
 						Title:         "Select files to send",
 						AllowMultiple: true,
 					}
-					if paths, err := app.OpenFiles(opts); err == nil && len(paths) > 0 {
-						m.AddAttachments(paths)
-					} else if m.DemoMode {
-						m.AddAttachments([]string{"release-notes.md"})
-					}
+					c.After(func() { m.PickAttachments(opts, []string{"release-notes.md"}) })
 				}
 				if iconBtn(c, "Attach photos", IconImage, true).Clicked() {
 					opts := app.OpenFileOptions{
 						Title:         "Select images to send",
 						AllowMultiple: true,
+						Filters: []app.FileFilter{
+							{Name: "Images", Pattern: "*.png;*.jpg;*.jpeg;*.gif"},
+						},
 					}
-					if paths, err := app.OpenFiles(opts); err == nil && len(paths) > 0 {
-						m.AddAttachments(paths)
-					} else if m.DemoMode {
-						m.AddAttachments([]string{"photo-1.png", "photo-2.jpg"})
-					}
+					c.After(func() { m.PickAttachments(opts, []string{"photo-1.png", "photo-2.jpg"}) })
 				}
 				field := ui.TextField(c, &m.Draft, "Message", "Message...")
 				field.Grow(1).Radius(12)
@@ -915,11 +957,12 @@ func (m *Model) previewModal(c ui.C) {
 		})
 	}, func() {
 		if doc.Path != "" && !strings.HasPrefix(doc.Path, "demo://") {
+			docPath := doc.Path
 			if ui.Button(c, "Open with System App").Small().Outline().Clicked() {
-				_ = app.OpenPath(doc.Path)
+				c.After(func() { m.OpenSystemPath(docPath) })
 			}
 			if ui.Button(c, "Reveal in Folder").Small().Ghost().Clicked() {
-				_ = app.RevealPath(doc.Path)
+				c.After(func() { m.RevealSystemPath(docPath) })
 			}
 		}
 		if ui.Button(c, "Close").Clicked() {

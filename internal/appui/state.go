@@ -2,6 +2,7 @@ package appui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -538,10 +539,10 @@ func (m *Model) SendDraft() {
 	}
 
 	acctID := m.ActiveAcctID
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
+	safeGo("send_draft", func() {
 		if len(files) == 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
 			if _, err := m.Client.SendTextMessage(ctx, acctID, chatID, text, quotedID); err != nil {
 				m.EnqueueUpdate(func(model *Model) {
 					model.Toaster.Show("Send failed", err.Error(), ui.ToastError)
@@ -554,7 +555,10 @@ func (m *Model) SendDraft() {
 				if idx == 0 {
 					caption = text
 				}
-				if _, err := m.Client.SendFileMessage(ctx, acctID, chatID, att.Path, caption); err != nil {
+				fctx, fcancel := context.WithTimeout(context.Background(), 60*time.Second)
+				_, err := m.Client.SendFileMessage(fctx, acctID, chatID, att.Path, caption)
+				fcancel()
+				if err != nil {
 					m.EnqueueUpdate(func(model *Model) {
 						model.Toaster.Show("Upload failed", att.Name+": "+err.Error(), ui.ToastError)
 					})
@@ -563,7 +567,7 @@ func (m *Model) SendDraft() {
 			}
 		}
 		m.loadChatMessagesAsync(acctID, chatID)
-	}()
+	})
 }
 
 func (m *Model) updateChatPreview(chatID int, previewText string, ts int64) {
@@ -1022,6 +1026,9 @@ func expandDroppedPaths(paths []string) []string {
 			continue
 		}
 		if !info.IsDir() {
+			if abs, aerr := filepath.Abs(p); aerr == nil {
+				p = abs
+			}
 			out = append(out, p)
 			continue
 		}
@@ -1042,36 +1049,115 @@ func expandDroppedPaths(paths []string) []string {
 // AddAttachments queues one or more files/images for multi-attachment upload,
 // deduplicating already-staged paths and expanding dropped folders.
 func (m *Model) AddAttachments(paths []string) int {
+	added, _ := m.AddAttachmentsDetailed(paths)
+	return added
+}
+
+// AddAttachmentsDetailed queues files/images without blocking the UI thread on
+// large image decoding, returning (addedCount, skippedDuplicateCount).
+func (m *Model) AddAttachmentsDetailed(paths []string) (int, int) {
 	expanded := expandDroppedPaths(paths)
 	existing := make(map[string]bool, len(m.PendingFiles))
 	for _, pf := range m.PendingFiles {
 		existing[pf.Path] = true
 	}
 	added := 0
+	duplicates := 0
+	var asyncDecodePaths []string
 	for i, p := range expanded {
-		if p == "" || existing[p] {
+		if p == "" {
+			continue
+		}
+		if existing[p] {
+			duplicates++
 			continue
 		}
 		existing[p] = true
 		name := filepath.Base(p)
 		isImg := IsImagePath(p)
+		var sizeBytes int64
+		onDisk := false
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			sizeBytes = info.Size()
+			onDisk = true
+		}
 		var bmp gfx.Bitmap
+		loadingThumb := false
 		if isImg {
-			if loaded, ok := LoadBitmap(p, 240); ok {
-				bmp = loaded
+			if onDisk {
+				if m.Invalidator != nil {
+					loadingThumb = true
+					asyncDecodePaths = append(asyncDecodePaths, p)
+				} else if loaded, ok := LoadBitmap(p, 240); ok {
+					bmp = loaded
+				} else {
+					bmp = DemoGradientBitmap(160, 120, byte(len(m.PendingFiles)+i+1))
+				}
 			} else {
 				bmp = DemoGradientBitmap(160, 120, byte(len(m.PendingFiles)+i+1))
 			}
 		}
 		m.PendingFiles = append(m.PendingFiles, PendingAttachment{
-			Path:    p,
-			Name:    name,
-			IsImage: isImg,
-			Bitmap:  bmp,
+			Path:         p,
+			Name:         name,
+			Size:         sizeBytes,
+			IsImage:      isImg,
+			LoadingThumb: loadingThumb,
+			Bitmap:       bmp,
 		})
 		added++
 	}
-	return added
+	if len(asyncDecodePaths) > 0 {
+		m.decodePendingThumbsAsync(asyncDecodePaths)
+	}
+	return added, duplicates
+}
+
+// decodePendingThumbsAsync decodes staged image thumbnails off the UI thread so
+// dropping multiple high-resolution photos never freezes Finder/Explorer or the window.
+func (m *Model) decodePendingThumbsAsync(paths []string) {
+	for idx, path := range paths {
+		p := path
+		seed := byte(idx + 1)
+		safeGo("thumb_decode", func() {
+			bmp, ok := LoadBitmap(p, 240)
+			if !ok {
+				bmp = DemoGradientBitmap(160, 120, seed)
+			}
+			m.EnqueueUpdate(func(m *Model) {
+				for i := range m.PendingFiles {
+					if m.PendingFiles[i].Path == p {
+						m.PendingFiles[i].Bitmap = bmp
+						m.PendingFiles[i].LoadingThumb = false
+					}
+				}
+			})
+		})
+	}
+}
+
+// PendingTotalBytes returns the sum of known byte sizes for all staged attachments.
+func (m *Model) PendingTotalBytes() int64 {
+	var total int64
+	for _, pf := range m.PendingFiles {
+		if pf.Size > 0 {
+			total += pf.Size
+		}
+	}
+	return total
+}
+
+// OpenPreviewForPending opens the universal in-app preview modal for a staged attachment
+// before it is sent.
+func (m *Model) OpenPreviewForPending(att PendingAttachment) {
+	m.OpenPreviewForMessage(dc.Message{
+		FilePath:  att.Path,
+		FileName:  att.Name,
+		FileBytes: att.Size,
+	})
+	if m.PreviewDoc.Kind == preview.KindImage && m.PreviewBitmap.Width == 0 && att.Bitmap.Width > 0 {
+		m.PreviewBitmap = att.Bitmap
+	}
 }
 
 // RemoveAttachment removes one queued attachment by index.
@@ -1083,23 +1169,45 @@ func (m *Model) RemoveAttachment(idx int) {
 }
 
 // HandleFileDrop implements app.Config.OnFileDrop for Telegram-style drag-and-drop multi-upload.
+// Only repaints on DragOver state transitions (not on every hover mouse move) for silky-smooth UX.
 func (m *Model) HandleFileDrop(ev gfx.FileDropEvent) gfx.EventResult {
 	switch ev.Phase {
 	case gfx.FileDropOver:
+		changed := !m.DragOver
 		m.DragOver = true
-		return gfx.EventResult{Handled: true, Repaint: true}
+		return gfx.EventResult{Handled: true, Repaint: changed}
 	case gfx.FileDropLeave:
+		changed := m.DragOver
 		m.DragOver = false
-		return gfx.EventResult{Handled: true, Repaint: true}
+		return gfx.EventResult{Handled: true, Repaint: changed}
 	case gfx.FileDropDrop:
 		m.DragOver = false
 		if m.ActiveChatID == 0 && len(m.Chats) > 0 {
 			m.SelectChat(m.Chats[0].ID)
 		}
-		if len(ev.Paths) > 0 {
-			added := m.AddAttachments(ev.Paths)
-			if added > 0 {
-				m.Toaster.Show("Files attached", fmt.Sprintf("%d item(s) ready to send", added), ui.ToastInfo)
+		paths := ev.Paths
+		if len(paths) == 0 && len(ev.Files) > 0 {
+			for _, f := range ev.Files {
+				if name := strings.TrimSpace(f.Name()); name != "" {
+					paths = append(paths, name)
+				}
+			}
+		}
+		if len(paths) > 0 {
+			added, dups := m.AddAttachmentsDetailed(paths)
+			switch {
+			case added > 0 && dups > 0:
+				m.Toaster.Show("Files attached", fmt.Sprintf("%d item(s) ready (%d duplicate skipped)", added, dups), ui.ToastInfo)
+			case added > 0:
+				detail := fmt.Sprintf("%d item(s) ready to send", added)
+				if total := m.PendingTotalBytes(); total > 0 {
+					detail = fmt.Sprintf("%d item(s) ready · %s total", added, formatBytesShort(total))
+				}
+				m.Toaster.Show("Files attached", detail, ui.ToastInfo)
+			case dups > 0:
+				m.Toaster.Show("Already attached", "Dropped file(s) are already in the send queue", ui.ToastInfo)
+			default:
+				m.Toaster.Show("No files added", "Dropped folder contained no attachable files", ui.ToastInfo)
 			}
 		}
 		return gfx.EventResult{Handled: true, Repaint: true}
@@ -1143,6 +1251,8 @@ func (m *Model) HandleSmartPaste() bool {
 // HandleEscape dismisses the topmost modal, search bar, or active reply/edit/select mode.
 func (m *Model) HandleEscape() bool {
 	switch {
+	case m.DragOver:
+		m.DragOver = false
 	case m.PreviewOpen:
 		m.PreviewOpen = false
 	case m.WebxdcOpen:
@@ -1250,5 +1360,77 @@ func demoPreviewDocument(name, uri string) preview.Document {
 		return preview.ParseBytes(name, []byte(raw), int64(len(raw)), false)
 	default:
 		return preview.Document{Path: uri, Name: name, Kind: preview.DetectKind(name)}
+	}
+}
+
+// PickAttachments opens the native OS file picker safely outside the frame paint pass,
+// handling cancellation silently and surfacing real OS dialog errors as a Toast.
+func (m *Model) PickAttachments(opts app.OpenFileOptions, demoFallback []string) {
+	paths, err := app.OpenFiles(opts)
+	if err != nil {
+		if errors.Is(err, app.ErrCanceled) {
+			return
+		}
+		if m.DemoMode && len(demoFallback) > 0 {
+			m.AddAttachments(demoFallback)
+			return
+		}
+		m.Toaster.Show("File picker unavailable", err.Error(), ui.ToastError)
+		return
+	}
+	if len(paths) == 0 {
+		return
+	}
+	if m.ActiveChatID == 0 && len(m.Chats) > 0 {
+		m.SelectChat(m.Chats[0].ID)
+	}
+	added, dups := m.AddAttachmentsDetailed(paths)
+	switch {
+	case added > 0 && dups > 0:
+		m.Toaster.Show("Files attached", fmt.Sprintf("%d item(s) ready (%d duplicate skipped)", added, dups), ui.ToastInfo)
+	case added > 0:
+		detail := fmt.Sprintf("%d item(s) ready to send", added)
+		if total := m.PendingTotalBytes(); total > 0 {
+			detail = fmt.Sprintf("%d item(s) ready · %s total", added, formatBytesShort(total))
+		}
+		m.Toaster.Show("Files attached", detail, ui.ToastInfo)
+	case dups > 0:
+		m.Toaster.Show("Already attached", "Selected file(s) are already in the send queue", ui.ToastInfo)
+	}
+}
+
+// OpenSystemPath opens a local file with the OS default app, falling back to
+// RevealPath for executables and surfacing errors via Toast instead of failing silently.
+func (m *Model) OpenSystemPath(path string) {
+	p := strings.TrimSpace(path)
+	if p == "" || strings.HasPrefix(p, "demo://") {
+		return
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if err := app.OpenPath(p); err != nil {
+		if errors.Is(err, app.ErrExecutablePath) {
+			if rerr := app.RevealPath(p); rerr == nil {
+				m.Toaster.Show("Revealed in folder", "Executable files are shown in folder instead of launched", ui.ToastInfo)
+				return
+			}
+		}
+		m.Toaster.Show("Cannot open file", err.Error(), ui.ToastError)
+	}
+}
+
+// RevealSystemPath highlights a local file in Finder / File Explorer / file manager,
+// surfacing errors via Toast instead of failing silently.
+func (m *Model) RevealSystemPath(path string) {
+	p := strings.TrimSpace(path)
+	if p == "" || strings.HasPrefix(p, "demo://") {
+		return
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if err := app.RevealPath(p); err != nil {
+		m.Toaster.Show("Cannot reveal file", err.Error(), ui.ToastError)
 	}
 }

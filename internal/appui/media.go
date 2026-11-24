@@ -19,10 +19,12 @@ var nextBitmapID atomic.Uint64
 // PendingAttachment represents one queued image or file waiting to be sent
 // in a Telegram-style multi-attachment album.
 type PendingAttachment struct {
-	Path    string
-	Name    string
-	IsImage bool
-	Bitmap  gfx.Bitmap
+	Path         string
+	Name         string
+	Size         int64
+	IsImage      bool
+	LoadingThumb bool
+	Bitmap       gfx.Bitmap
 }
 
 // IsImagePath reports whether a filename has a supported raster image extension.

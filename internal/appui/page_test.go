@@ -272,3 +272,50 @@ func TestDragDropDedupEscapeAndPanicRecovery(t *testing.T) {
 	})
 	<-done
 }
+
+func TestDragDropHoverThrottlingSizePreviewAndEscape(t *testing.T) {
+	m := NewDemoModel()
+	tmp := t.TempDir()
+	f1 := filepath.Join(tmp, "spec.md")
+	_ = os.WriteFile(f1, []byte("# Drag-Drop Spec\n\nVerified."), 0o600)
+
+	// First FileDropOver repaints; repeated hover moves do NOT trigger redundant repaints.
+	r1 := m.HandleFileDrop(gfx.FileDropEvent{Phase: gfx.FileDropOver, X: 100, Y: 100})
+	if !r1.Handled || !r1.Repaint || !m.DragOver {
+		t.Fatalf("first FileDropOver should handle + repaint + set DragOver: %+v", r1)
+	}
+	r2 := m.HandleFileDrop(gfx.FileDropEvent{Phase: gfx.FileDropOver, X: 102, Y: 104})
+	if !r2.Handled || r2.Repaint {
+		t.Fatalf("repeated FileDropOver should handle without redundant repaint: %+v", r2)
+	}
+
+	// Escape clears a stuck DragOver overlay immediately.
+	if !m.HandleEscape() || m.DragOver {
+		t.Fatal("HandleEscape should clear stuck DragOver")
+	}
+
+	// FileDropLeave when already false does not repaint.
+	rLeave := m.HandleFileDrop(gfx.FileDropEvent{Phase: gfx.FileDropLeave})
+	if !rLeave.Handled || rLeave.Repaint {
+		t.Fatalf("redundant FileDropLeave should not repaint: %+v", rLeave)
+	}
+
+	// Drop captures file size and deduplicates subsequent drops.
+	m.HandleFileDrop(gfx.FileDropEvent{Phase: gfx.FileDropDrop, Paths: []string{f1}})
+	if len(m.PendingFiles) != 1 || m.PendingFiles[0].Size <= 0 {
+		t.Fatalf("expected 1 pending file with positive Size, got %+v", m.PendingFiles)
+	}
+	if m.PendingTotalBytes() != m.PendingFiles[0].Size {
+		t.Fatalf("expected PendingTotalBytes=%d, got %d", m.PendingFiles[0].Size, m.PendingTotalBytes())
+	}
+	added, dups := m.AddAttachmentsDetailed([]string{f1})
+	if added != 0 || dups != 1 {
+		t.Fatalf("expected (0, 1) on duplicate drop, got (%d, %d)", added, dups)
+	}
+
+	// Clicking a staged attachment opens the in-app preview modal.
+	m.OpenPreviewForPending(m.PendingFiles[0])
+	if !m.PreviewOpen || m.PreviewDoc.Name != "spec.md" {
+		t.Fatalf("expected preview modal open for spec.md, got open=%v doc=%+v", m.PreviewOpen, m.PreviewDoc)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/app/iconpng"
@@ -17,9 +18,9 @@ import (
 
 	"github.com/acam-infra/parla-viva/internal/agentcli"
 	"github.com/acam-infra/parla-viva/internal/applog"
-	"github.com/acam-infra/parla-viva/internal/config"
 	"github.com/acam-infra/parla-viva/internal/appui"
 	"github.com/acam-infra/parla-viva/internal/assets"
+	"github.com/acam-infra/parla-viva/internal/config"
 	"github.com/acam-infra/parla-viva/internal/dc"
 )
 
@@ -107,9 +108,26 @@ func main() {
 	webHost.OnReady = func() {
 		model.WebReady = true
 	}
+
+	var statusMu sync.Mutex
+	var statusItem *app.StatusItem
+	removeStatusItem := func() {
+		statusMu.Lock()
+		item := statusItem
+		statusItem = nil
+		statusMu.Unlock()
+		if item != nil {
+			item.Remove()
+		}
+	}
+
+	var appMu sync.Mutex
+	var activeApp *app.Application
+
 	var cleanupOnce sync.Once
 	cleanup := func(reason string) {
 		cleanupOnce.Do(func() {
+			removeStatusItem()
 			if logger != nil {
 				logger.Info("shutdown", "reason", reason)
 			}
@@ -127,18 +145,55 @@ func main() {
 			}
 		})
 	}
-	defer cleanup("exit")
+	cleanupWithTimeout := func(reason string, timeout time.Duration) {
+		done := make(chan struct{})
+		go func() {
+			cleanup(reason)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(timeout):
+		}
+	}
 
-	model.OnQuit = func() {
-		cleanup("quit_shortcut")
+	var failsafeOnce sync.Once
+	scheduleFailsafeExit := func(d time.Duration) {
+		failsafeOnce.Do(func() {
+			time.AfterFunc(d, func() {
+				os.Exit(0)
+			})
+		})
+	}
+
+	requestExit := func(reason string, allow func()) {
+		removeStatusItem()
+		cleanupWithTimeout(reason, 800*time.Millisecond)
+		scheduleFailsafeExit(1200 * time.Millisecond)
+		if allow != nil {
+			allow()
+			return
+		}
+		appMu.Lock()
+		a := activeApp
+		appMu.Unlock()
+		if a != nil {
+			a.Quit()
+			return
+		}
 		os.Exit(0)
 	}
 
-	// React cleanly to SIGINT / SIGTERM: flush cache, remove IPC descriptor, close RPC server, and exit 0.
+	defer cleanup("exit")
+
+	model.OnQuit = func() {
+		requestExit("quit_shortcut", nil)
+	}
+
+	// React cleanly to SIGINT / SIGTERM: remove tray icon, flush cache, remove IPC descriptor, close RPC server, and exit 0.
 	go func() {
 		<-ctx.Done()
-		cleanup("signal")
-		os.Exit(0)
+		requestExit("signal", nil)
 	}()
 
 	page := ui.NewPage(ui.PageConfig{
@@ -146,6 +201,7 @@ func main() {
 		Theme: &model.Theme,
 	})
 	winIcon, _ := iconpng.Decode(assets.AppIconPNG)
+	trayIcon, trayIconErr := iconpng.DecodeFit(assets.AppIconPNG, 64)
 	cfg := ui.Configure(page, app.Config{
 		Title:       "Parla Viva",
 		Icon:        winIcon,
@@ -157,25 +213,64 @@ func main() {
 		OnFileDrop:  model.HandleFileDrop,
 		OnActivate:  model.WakeNetwork,
 		OnClosed: func() {
-			cleanup("window_closed")
-			os.Exit(0)
+			requestExit("window_closed", nil)
 		},
 	})
 
 	err := app.RunApplication(func(application *app.Application) error {
+		appMu.Lock()
+		activeApp = application
+		appMu.Unlock()
+
 		application.OnQuitRequest(func(allow func()) {
-			cleanup("quit_request")
-			allow()
-			os.Exit(0)
+			requestExit("quit_request", allow)
 		})
-		model.OnQuit = func() {
-			cleanup("quit_shortcut")
-			application.Quit()
-			os.Exit(0)
+
+		win, err := application.OpenWindow(cfg, new(gfx.Canvas))
+		if err != nil {
+			return err
 		}
-		_, err := application.OpenWindow(cfg, new(gfx.Canvas))
-		return err
+
+		if trayIconErr == nil && trayIcon.Size > 0 {
+			item, serr := application.AddStatusItem(app.StatusItemConfig{
+				Tooltip: "Parla Viva",
+				Icon: app.StatusIcon{
+					Size: trayIcon.Size,
+					RGBA: trayIcon.RGBA,
+				},
+				OnClick: func(_ app.StatusClick) {
+					win.Show()
+				},
+				Menu: func() []app.MenuItem {
+					return []app.MenuItem{
+						{
+							ID:    "show",
+							Title: "Show Parla Viva",
+							OnSelect: func() {
+								win.Show()
+							},
+						},
+						{Separator: true},
+						{
+							ID:    "quit",
+							Title: "Quit Parla Viva",
+							OnSelect: func() {
+								requestExit("tray_quit", nil)
+							},
+						},
+					}
+				},
+			})
+			if serr == nil {
+				statusMu.Lock()
+				statusItem = item
+				statusMu.Unlock()
+			}
+		}
+
+		return nil
 	})
+	cleanup("exit")
 	if err != nil {
 		log.Fatal(err)
 	}

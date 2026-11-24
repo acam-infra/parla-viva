@@ -327,7 +327,10 @@ func (t *Transport) Close() error {
 		case <-done:
 		case <-time.After(300 * time.Millisecond):
 			_ = cmd.Process.Kill()
-			<-done
+			select {
+			case <-done:
+			case <-time.After(300 * time.Millisecond):
+			}
 		}
 	}
 	return nil
