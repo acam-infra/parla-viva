@@ -189,3 +189,33 @@ func (c *Client) MaybeNetwork(ctx context.Context) error {
 	_, err := c.caller.Call(ctx, "maybe_network", []any{})
 	return err
 }
+
+// GetContacts returns hydrated Delta Chat contacts for an account, optionally filtered by query.
+func (c *Client) GetContacts(ctx context.Context, accountID int, query string) ([]Contact, error) {
+	var q any
+	if query != "" {
+		q = query
+	}
+	raw, err := c.caller.Call(ctx, "get_contacts", []any{accountID, 0, q})
+	if err != nil {
+		return nil, err
+	}
+	var contacts []Contact
+	if err := json.Unmarshal(raw, &contacts); err != nil {
+		return nil, fmt.Errorf("dc: decode contacts: %w", err)
+	}
+	return contacts, nil
+}
+
+// GetChatContacts returns contact IDs belonging to a chat.
+func (c *Client) GetChatContacts(ctx context.Context, accountID, chatID int) ([]int, error) {
+	raw, err := c.caller.Call(ctx, "get_chat_contacts", []any{accountID, chatID})
+	if err != nil {
+		return nil, err
+	}
+	var ids []int
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return nil, fmt.Errorf("dc: decode chat contacts: %w", err)
+	}
+	return ids, nil
+}

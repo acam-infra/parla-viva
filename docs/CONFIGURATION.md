@@ -36,6 +36,7 @@ parla-viva config set notifications true
 | `accountsDir` | string | Auto-detected | Delta Chat accounts directory |
 | `rpcServer` | string | Auto-discovered | Explicit path to `deltachat-rpc-server` |
 | `theme` | string | `"light"` | UI theme: `"light"`, `"dark"`, or `"system"` |
+| `colorScheme` | string | `"classic"` | GoIM-inspired color scheme: `"classic"`, `"pine"`, `"clay"`, or `"iris"` |
 | `layout` | string | `"bubbles"` | Message layout: `"bubbles"`, `"workspace"`, or `"compact"` |
 | `enterToSend` | bool | `true` | Press Enter to send messages (`false` inserts newline) |
 | `notifications` | bool | `true` | Enable native OS desktop notifications on incoming messages |

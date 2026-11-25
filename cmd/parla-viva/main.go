@@ -70,9 +70,7 @@ func main() {
 				model = appui.NewLiveModel(client, inv)
 				model.AccountsPath = *accountsPath
 				model.EnterToSend = appCfg.EnterToSend
-				if appCfg.Theme == "dark" {
-					model.SetDarkMode(true)
-				}
+				model.SetAppearance(appCfg.Theme == "dark", appCfg.ColorScheme)
 				switch appCfg.Layout {
 				case "workspace":
 					model.Layout = appui.LayoutWorkspace
@@ -104,7 +102,9 @@ func main() {
 	if model == nil {
 		model = appui.NewDemoModel()
 		model.Invalidator = inv
+		model.SetAppearance(appCfg.Theme == "dark", appCfg.ColorScheme)
 	}
+	model.CustomTitlebar = true
 	model.WebHost = webHost
 	webHost.OnReady = func() {
 		model.WebReady = true
@@ -218,16 +218,24 @@ func main() {
 	})
 	winIcon, _ := iconpng.Decode(assets.AppIconPNG)
 	trayIcon, trayIconErr := iconpng.DecodeFit(assets.AppIconPNG, 64)
+	if titleIcon, err := iconpng.DecodeFit(assets.AppIconPNG, 48); err == nil && titleIcon.Size > 0 {
+		model.AppIconBitmap = appui.BitmapFromRGBA(titleIcon.RGBA, titleIcon.Size, titleIcon.Size)
+	}
 	cfg := ui.Configure(page, app.Config{
-		Title:       "Parla Viva",
-		Icon:        winIcon,
-		Width:       1200,
-		Height:      780,
-		Web:         webHost,
-		Invalidator: inv,
-		OnWake:      model.DrainUpdates,
-		OnFileDrop:  model.HandleFileDrop,
-		OnActivate:  model.WakeNetwork,
+		Title:          "Parla Viva",
+		Icon:           winIcon,
+		Width:          1280,
+		Height:         820,
+		MinWidth:       960,
+		MinHeight:      620,
+		WindowMode:     app.WindowCustomTitlebar,
+		TitlebarHeight: appui.TitlebarHeight,
+		WindowControls: model.WindowControlsStyle,
+		Web:            webHost,
+		Invalidator:    inv,
+		OnWake:         model.DrainUpdates,
+		OnFileDrop:     model.HandleFileDrop,
+		OnActivate:     model.WakeNetwork,
 		OnCloseRequest: func(allow func()) {
 			// Default Telegram-style behavior: hide window to taskbar tray / menu bar
 			// when a status area is available; explicit Quit or tray-less desktops exit normally.

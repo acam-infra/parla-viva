@@ -92,6 +92,15 @@ func TestClientAccountsChatsAndMessages(t *testing.T) {
 				"contextId": 1,
 				"event":     map[string]any{"kind": "IncomingMsg", "chatId": 10, "msgId": 103},
 			}, nil
+		case "get_contacts":
+			return []map[string]any{
+				{
+					"id": 2, "displayName": "Bob", "address": "bob@nine.testrun.org",
+					"isVerified": true, "wasSeenRecently": true, "status": "Building Viva desktop UI",
+				},
+			}, nil
+		case "get_chat_contacts":
+			return []int{1, 2}, nil
 		default:
 			return nil, &rpcError{Code: -32601, Message: "method not found: " + method}
 		}
@@ -140,5 +149,15 @@ func TestClientAccountsChatsAndMessages(t *testing.T) {
 	ev, err := client.GetNextEvent(ctx)
 	if err != nil || ev.Event.Kind != "IncomingMsg" || ev.Event.MsgID != 103 {
 		t.Fatalf("GetNextEvent = %+v, err=%v", ev, err)
+	}
+
+	contacts, err := client.GetContacts(ctx, 1, "")
+	if err != nil || len(contacts) != 1 || contacts[0].DisplayLabel() != "Bob" || !contacts[0].IsVerified {
+		t.Fatalf("GetContacts = %+v, err=%v", contacts, err)
+	}
+
+	memberIDs, err := client.GetChatContacts(ctx, 1, 10)
+	if err != nil || len(memberIDs) != 2 {
+		t.Fatalf("GetChatContacts = %v, err=%v", memberIDs, err)
 	}
 }

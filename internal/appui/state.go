@@ -23,6 +23,25 @@ import (
 	"github.com/acam-infra/parla-viva/internal/preview"
 )
 
+// Section selects the active top-level workspace tab in the GoIM-style navigation rail.
+type Section string
+
+const (
+	SectionChats    Section = "chats"
+	SectionContacts Section = "contacts"
+	SectionFiles    Section = "files"
+	SectionSettings Section = "settings"
+)
+
+// SettingsTab keys for the GoIM-style categorized settings workspace.
+const (
+	SettingsTabGeneral       = "general"
+	SettingsTabAccounts      = "accounts"
+	SettingsTabNotifications = "notifications"
+	SettingsTabSecurity      = "security"
+	SettingsTabAbout         = "about"
+)
+
 // LayoutMode selects one of Parla's three conversation layouts.
 type LayoutMode string
 
@@ -36,6 +55,8 @@ var LayoutModes = []LayoutMode{LayoutBubble, LayoutCompact, LayoutWorkspace}
 
 var ChatFilters = []string{"All", "Unread", "Pinned"}
 
+var ContactFilters = []string{"All", "Groups", "Direct"}
+
 var GalleryTabs = []string{"All", "Images", "Files", "Webxdc"}
 
 // Model holds all application state for Parla Viva.
@@ -43,22 +64,28 @@ type Model struct {
 	mu sync.Mutex
 
 	// Live RPC client (nil when running in offline demo mode).
-	Client       *dc.Client
-	Invalidator  *app.Invalidator
-	WebHost      *app.WebHost
-	WebView      *app.WebView
-	WebReady     bool
-	AccountsPath string
-	OnEvent      func(dc.Event)
-	OnQuit       func()
-	Notifier     *notify.Notifier
-	DemoMode     bool
-	StatusText   string
+	Client         *dc.Client
+	Invalidator    *app.Invalidator
+	WebHost        *app.WebHost
+	WebView        *app.WebView
+	WebReady       bool
+	AccountsPath   string
+	OnEvent        func(dc.Event)
+	OnQuit         func()
+	OnTogglePin    func() bool
+	Notifier       *notify.Notifier
+	DemoMode       bool
+	StatusText     string
+	Connectivity   int
+	CustomTitlebar bool
+	MainPinned     bool
+	AppIconBitmap  gfx.Bitmap
 
-	// Accounts & active chat state
+	// Accounts, contacts & active chat state
 	Accounts     []dc.Account
 	ActiveAcctID int
 	Chats        []dc.ChatEntry
+	Contacts     []dc.Contact
 	ActiveChatID int
 	Messages     map[int][]dc.Message
 	Windows      map[int]history.Window
@@ -74,16 +101,29 @@ type Model struct {
 	PreviewTable  ui.TableState
 	PreviewRows   ui.TableRows
 
-	// Navigation, header menus & search
-	SidebarFilter string
-	SidebarQuery  string
-	SearchOpen    bool
-	SearchQuery   string
-	SearchMatch   int
-	QuickOpen     bool
-	QuickQuery    string
-	NewMenuOpen   bool
-	MoreMenuOpen  bool
+	// GoIM-style navigation rail, contacts & docked files pane state
+	Section             Section
+	SidebarFilter       string
+	SidebarQuery        string
+	ContactsFilter      string
+	ContactsQuery       string
+	SelectedContactID   int
+	SelectedGroupChatID int
+	CollapsedGroups     map[string]bool
+	ChatFilesOpen       bool
+	ChatFilesFilter     string
+	ChatFilesQuery      string
+	FilesFilter         string
+	FilesQuery          string
+	SettingsTab         string
+	SearchOpen          bool
+	SearchQuery         string
+	SearchMatch         int
+	QuickOpen           bool
+	QuickQuery          string
+	NewMenuOpen         bool
+	MoreMenuOpen        bool
+	EmojiOpen           bool
 
 	// Composer, multi-image album queue & drag-and-drop
 	Draft        string
@@ -117,7 +157,9 @@ type Model struct {
 
 	// Appearance & preferences
 	DarkMode      bool
+	ColorScheme   string
 	Theme         gfx.Theme
+	Palette       Palette
 	Layout        LayoutMode
 	EnterToSend   bool
 	RenderMD      bool
@@ -137,21 +179,30 @@ type Model struct {
 }
 
 func newBaseModel() *Model {
+	theme, pal := BuildAppearance(false, SchemeClassic)
 	return &Model{
-		SidebarFilter: "All",
-		GalleryTab:    "All",
-		Layout:        LayoutBubble,
-		EnterToSend:   true,
-		RenderMD:      true,
-		NotifyEnabled: true,
-		Theme:         gfx.LightTheme(),
-		Split:         ui.SplitterState{Pos: 300},
-		Messages:      make(map[int][]dc.Message),
-		Windows:       make(map[int]history.Window),
-		SelectedMsgs:  make(map[int]bool),
-		ImageCache:    make(map[string]gfx.Bitmap),
-		NewAcctRelay:  dc.DefaultChatmailRelay,
-		NextLocalID:   5000,
+		Section:         SectionChats,
+		SidebarFilter:   "All",
+		ContactsFilter:  "All",
+		ChatFilesFilter: "All",
+		FilesFilter:     "All",
+		GalleryTab:      "All",
+		SettingsTab:     SettingsTabGeneral,
+		Layout:          LayoutBubble,
+		EnterToSend:     true,
+		RenderMD:        true,
+		NotifyEnabled:   true,
+		ColorScheme:     SchemeClassic,
+		Theme:           theme,
+		Palette:         pal,
+		Split:           ui.SplitterState{Pos: SidebarDefaultWidth},
+		Messages:        make(map[int][]dc.Message),
+		Windows:         make(map[int]history.Window),
+		SelectedMsgs:    make(map[int]bool),
+		CollapsedGroups: make(map[string]bool),
+		ImageCache:      make(map[string]gfx.Bitmap),
+		NewAcctRelay:    dc.DefaultChatmailRelay,
+		NextLocalID:     5000,
 	}
 }
 
@@ -169,6 +220,29 @@ func NewDemoModel() *Model {
 		{ID: 1, Kind: "Configured", DisplayName: "Alice", Addr: "alice@nine.testrun.org"},
 		{ID: 2, Kind: "Configured", DisplayName: "Work Profile", Addr: "dev@chatmail.example"},
 	}
+	m.Contacts = []dc.Contact{
+		{
+			ID: 2, DisplayName: "Bob Chen", Address: "bob@nine.testrun.org",
+			IsVerified: true, WasSeenRecently: true, LastSeen: now - 45,
+			Status: "Polishing Parla Viva desktop shell & GPU text rendering",
+		},
+		{
+			ID: 3, DisplayName: "Elena (Chatmail)", Address: "elena@nine.testrun.org",
+			IsVerified: true, WasSeenRecently: true, LastSeen: now - 180,
+			Status: "Testing Webxdc checklists and SecureJoin QR pairing",
+		},
+		{
+			ID: 4, DisplayName: "Lin Wan", Address: "linwan@chatmail.example",
+			IsVerified: true, WasSeenRecently: false, LastSeen: now - 3600,
+			Status: "Design review for light/dark slate theme tokens",
+		},
+		{
+			ID: 5, DisplayName: "Parla Viva Bot", Address: "bot@nine.testrun.org",
+			IsVerified: false, IsBot: true, WasSeenRecently: true, LastSeen: now - 20,
+			Status: "Automated encrypted echo & attachment verification bot",
+		},
+	}
+	m.SelectedContactID = 2
 	m.Chats = []dc.ChatEntry{
 		{
 			ID: 10, Name: "Parla → Viva Migration", Kind: dc.ChatGroup, ChatType: "Group",
@@ -221,10 +295,10 @@ func NewDemoModel() *Model {
 			FileBytes: 1024, State: dc.MsgStateInFresh,
 		},
 		{
-			ID: 1005, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
-			Text:      "Cross-platform build metrics (click to preview as interactive Table):",
+			ID: 1005, ChatID: 10, SenderContactID: 1, SenderName: "Alice", IsOutgoing: true,
+			Text:      "Looks super crisp! Attached the cross-platform build metrics table:",
 			Timestamp: now - 60, ViewType: "File", FilePath: "demo://build-metrics.csv", FileName: "build-metrics.csv",
-			FileBytes: 512, State: dc.MsgStateInFresh,
+			FileBytes: 512, State: dc.MsgStateOutMdnRcvd,
 		},
 	}
 
@@ -241,6 +315,11 @@ func NewDemoModel() *Model {
 			ID: 3001, ChatID: 12, SenderContactID: 1, SenderName: "Alice", IsOutgoing: true,
 			Text:      "viva package --zip builds a single native binary with Ed25519 signed updates.",
 			Timestamp: now - 3600, ViewType: "Text", State: dc.MsgStateOutDelivered,
+		},
+		{
+			ID: 3002, ChatID: 12, SenderContactID: 1, SenderName: "Alice", IsOutgoing: true,
+			Timestamp: now - 3540, ViewType: "File", FilePath: "demo://parla-viva-checklist.pdf", FileName: "parla-viva-checklist.pdf",
+			FileBytes: 698400, State: dc.MsgStateOutDelivered,
 		},
 	}
 
@@ -651,14 +730,21 @@ func (m *Model) CreateDemoChat(name, addr string) {
 	m.Toaster.Show("Chat created", name, ui.ToastSuccess)
 }
 
-// SetDarkMode switches between Viva's built-in LightTheme and DarkTheme.
+// SetDarkMode switches between dark and light mode while preserving the active color scheme.
 func (m *Model) SetDarkMode(dark bool) {
+	m.SetAppearance(dark, m.ColorScheme)
+}
+
+// SetColorScheme switches the desktop color scheme while preserving light/dark mode.
+func (m *Model) SetColorScheme(scheme string) {
+	m.SetAppearance(m.DarkMode, scheme)
+}
+
+// SetAppearance updates both dark/light mode and the GoIM-inspired color scheme.
+func (m *Model) SetAppearance(dark bool, scheme string) {
 	m.DarkMode = dark
-	if dark {
-		m.Theme = gfx.DarkTheme()
-	} else {
-		m.Theme = gfx.LightTheme()
-	}
+	m.ColorScheme = NormalizeColorScheme(scheme)
+	m.Theme, m.Palette = BuildAppearance(m.DarkMode, m.ColorScheme)
 }
 
 // PinnedMessages returns all pinned messages in the active conversation.
@@ -763,13 +849,30 @@ func (m *Model) StartLiveSync(ctx context.Context) {
 			model.saveCacheAsync()
 		})
 
-		// Non-blocking background startup: SecureJoin QR & top-5 chat prefetch (IO already started at t=0).
+		// Non-blocking background startup: SecureJoin QR, contacts, connectivity & top-5 chat prefetch.
 		if chosenID > 0 {
 			go func(acctID int, chatList []dc.ChatEntry, skipChat int) {
 				if qr, err := m.Client.GetChatSecurejoinQRCode(ctx, acctID, 0); err == nil && qr != "" {
 					m.EnqueueUpdate(func(model *Model) {
 						model.InviteLink = qr
 						model.saveCacheAsync()
+					})
+				}
+				if contacts, err := m.Client.GetContacts(ctx, acctID, ""); err == nil {
+					m.EnqueueUpdate(func(model *Model) {
+						if model.ActiveAcctID == acctID {
+							model.Contacts = contacts
+							if model.SelectedContactID == 0 && len(contacts) > 0 {
+								model.SelectedContactID = contacts[0].ID
+							}
+						}
+					})
+				}
+				if conn, err := m.Client.GetConnectivity(ctx, acctID); err == nil {
+					m.EnqueueUpdate(func(model *Model) {
+						if model.ActiveAcctID == acctID {
+							model.Connectivity = conn
+						}
 					})
 				}
 				prefetched := 0
@@ -1253,6 +1356,8 @@ func (m *Model) HandleEscape() bool {
 	switch {
 	case m.DragOver:
 		m.DragOver = false
+	case m.EmojiOpen:
+		m.EmojiOpen = false
 	case m.PreviewOpen:
 		m.PreviewOpen = false
 	case m.WebxdcOpen:
@@ -1271,6 +1376,8 @@ func (m *Model) HandleEscape() bool {
 		m.AccountsOpen = false
 	case m.NewChatOpen:
 		m.NewChatOpen = false
+	case m.ChatFilesOpen:
+		m.ChatFilesOpen = false
 	case m.SearchOpen:
 		m.SearchOpen = false
 		m.SearchQuery = ""

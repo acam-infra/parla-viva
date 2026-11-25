@@ -21,6 +21,12 @@ func TestConfigLoadSaveAndSetKey(t *testing.T) {
 	if err := cfg.SetKey("theme", "dark"); err != nil {
 		t.Fatal(err)
 	}
+	if err := cfg.SetKey("colorScheme", "pine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SetKey("colorScheme", "invalid"); err == nil {
+		t.Fatal("expected error for invalid colorScheme")
+	}
 	if err := cfg.SetKey("logLevel", "debug"); err != nil {
 		t.Fatal(err)
 	}

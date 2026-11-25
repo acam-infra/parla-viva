@@ -14,8 +14,8 @@
 | `src/rpc_client.vala` + `rpc_parsers.vala` | `internal/dc/client.go` + `models.go` | Typed accounts, chatlist, messages, reactions, quotes, events |
 | `src/message_history.vala` | `internal/history/window.go` | 61-message bounded context window (`target-30..target+30`) & unread divider |
 | `src/webxdc*.vala` | `internal/webxdc/host.go` | In-memory `.xdc` ZIP server via `app.WebScheme`, `Ephemeral: true`, `connect-src 'none'` CSP |
-| `src/window.vala` + `conversation_view.vala` | `internal/appui/page.go` + `state.go` | Declarative `ui.C`, `ui.Splitter`, `ui/message`, 3 layouts, shortcuts, modals |
-| `tests/*_ui_test.vala` | `internal/appui/page_test.go` | Real windowless `app.NewDriver` tests + `-tags vivahead` inspection |
+| `src/window.vala` + `conversation_view.vala` | `internal/appui/{shell,sidebar,chat_view,contacts_view,files_view,settings_view,modals,theme,state,actions}.go` | Modular GoIM-inspired Viva shell (titlebar, rail, 4 color schemes, right Chat Files drawer, Contacts, Files table, Settings) cleanly decoupled from `internal/dc` |
+| `tests/*_ui_test.vala` | `internal/appui/page_test.go` + `screenshot_test.go` | Windowless `app.NewDriver` tests + `viva/headless` offscreen PNG visual QA |
 
 ## Verification Pipeline
 

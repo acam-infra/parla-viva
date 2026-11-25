@@ -18,15 +18,16 @@ const DefaultFilename = "parla-viva.json"
 type Config struct {
 	AccountsDir       string `json:"accountsDir,omitempty"`
 	RPCServer         string `json:"rpcServer,omitempty"`
-	Theme             string `json:"theme"`             // "light", "dark", "system"
-	Layout            string `json:"layout"`            // "bubbles", "workspace", "compact"
-	EnterToSend       bool   `json:"enterToSend"`       // Enter submits message
-	Notifications     bool   `json:"notifications"`     // Native OS notifications
-	NotificationSound bool   `json:"notificationSound"` // Notification sound on macOS/Windows
-	NotifyThrottleMs  int    `json:"notifyThrottleMs"`  // Per-chat throttle in ms
-	LogLevel          string `json:"logLevel"`          // "debug", "info", "warn", "error"
-	LogFile           string `json:"logFile,omitempty"` // Defaults to <accountsDir>/logs/parla-viva.log
-	LogMaxMB          int    `json:"logMaxMB"`          // Rotation threshold in MB
+	Theme             string `json:"theme"`                 // "light", "dark", "system"
+	ColorScheme       string `json:"colorScheme,omitempty"` // "classic", "pine", "clay", "iris"
+	Layout            string `json:"layout"`                // "bubbles", "workspace", "compact"
+	EnterToSend       bool   `json:"enterToSend"`           // Enter submits message
+	Notifications     bool   `json:"notifications"`         // Native OS notifications
+	NotificationSound bool   `json:"notificationSound"`     // Notification sound on macOS/Windows
+	NotifyThrottleMs  int    `json:"notifyThrottleMs"`      // Per-chat throttle in ms
+	LogLevel          string `json:"logLevel"`              // "debug", "info", "warn", "error"
+	LogFile           string `json:"logFile,omitempty"`     // Defaults to <accountsDir>/logs/parla-viva.log
+	LogMaxMB          int    `json:"logMaxMB"`              // Rotation threshold in MB
 }
 
 // Default returns sensible defaults for a given accounts directory.
@@ -37,6 +38,7 @@ func Default(accountsDir string) Config {
 	return Config{
 		AccountsDir:       accountsDir,
 		Theme:             "light",
+		ColorScheme:       "classic",
 		Layout:            "bubbles",
 		EnterToSend:       true,
 		Notifications:     true,
@@ -113,6 +115,13 @@ func (c *Config) SetKey(key, val string) error {
 		default:
 			return fmt.Errorf("invalid theme %q (use light, dark, or system)", v)
 		}
+	case "colorscheme", "color_scheme", "scheme":
+		switch strings.ToLower(v) {
+		case "classic", "pine", "clay", "iris":
+			c.ColorScheme = strings.ToLower(v)
+		default:
+			return fmt.Errorf("invalid colorScheme %q (use classic, pine, clay, or iris)", v)
+		}
 	case "layout":
 		switch strings.ToLower(v) {
 		case "bubbles", "workspace", "compact":
@@ -175,6 +184,9 @@ func (c *Config) normalize(accountsDir string) {
 	}
 	if c.Theme == "" {
 		c.Theme = "light"
+	}
+	if c.ColorScheme == "" {
+		c.ColorScheme = "classic"
 	}
 	if c.Layout == "" {
 		c.Layout = "bubbles"
