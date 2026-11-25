@@ -67,12 +67,12 @@ func TestGoIMStyleScreenshots(t *testing.T) {
 	render("chat-dark.png", true, SchemeClassic, func(m *Model) {
 		m.Section = SectionChats
 		m.ChatFilesOpen = true
-		m.Draft = "Double-checking the SecureJoin invite link before publishing v0.9.0."
+		m.Draft = "Double-checking the SecureJoin invite link before publishing v0.9.1."
 	})
 	render("chat-light.png", false, SchemeClassic, func(m *Model) {
 		m.Section = SectionChats
 		m.ChatFilesOpen = true
-		m.Draft = "Double-checking the SecureJoin invite link before publishing v0.9.0."
+		m.Draft = "Double-checking the SecureJoin invite link before publishing v0.9.1."
 	})
 	render("contacts-dark.png", true, SchemeClassic, func(m *Model) {
 		m.Section = SectionContacts

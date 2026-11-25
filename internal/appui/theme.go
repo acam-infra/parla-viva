@@ -86,9 +86,11 @@ type Palette struct {
 	Incoming      gfx.Color
 	Own           gfx.Color
 	BubbleBorder  gfx.Color
+	OwnBorder     gfx.Color
 	FileCard      gfx.Color
 	FileBorder    gfx.Color
 	BadgeMutedBg  gfx.Color
+	BadgeMutedFg  gfx.Color
 	Success       gfx.Color
 	Danger        gfx.Color
 	Warning       gfx.Color
@@ -176,15 +178,20 @@ func buildPalette(t gfx.Theme, dark bool, scheme string) Palette {
 	if _, ok := schemePresets[scheme]; ok {
 		rail := t.Background.Mix(t.Foreground, 0.09)
 		incoming := t.Card
+		mutedBadgeBg := ui.RGB(164, 171, 180)
+		mutedBadgeFg := ui.RGB(255, 255, 255)
 		if dark {
 			rail = t.Background.Mix(ui.RGB(0, 0, 0), 0.22)
 			incoming = t.CardElevated
+			mutedBadgeBg = ui.RGB(88, 95, 105)
+			mutedBadgeFg = ui.RGB(228, 232, 238)
 		}
+		chatSurf := t.Background.Mix(t.Card, 0.72)
 		return Palette{
 			Rail:          rail,
 			Sidebar:       t.Background,
-			Chat:          t.Background.Mix(t.Card, 0.72),
-			Header:        t.Card,
+			Chat:          chatSurf,
+			Header:        chatSurf,
 			Border:        t.Border,
 			Hover:         t.Hover,
 			Selected:      t.Selection,
@@ -196,9 +203,11 @@ func buildPalette(t gfx.Theme, dark bool, scheme string) Palette {
 			Incoming:      incoming,
 			Own:           t.Selection,
 			BubbleBorder:  t.Foreground.WithAlpha(0.09),
+			OwnBorder:     t.Primary.WithAlpha(0.25),
 			FileCard:      t.CardElevated,
 			FileBorder:    t.Border,
-			BadgeMutedBg:  t.CardElevated,
+			BadgeMutedBg:  mutedBadgeBg,
+			BadgeMutedFg:  mutedBadgeFg,
 			Success:       ui.RGB(55, 197, 118),
 			Danger:        ui.RGB(239, 68, 68),
 			Warning:       ui.RGB(245, 158, 11),
@@ -206,11 +215,12 @@ func buildPalette(t gfx.Theme, dark bool, scheme string) Palette {
 	}
 
 	if dark {
+		chatSurf := ui.RGB(38, 45, 54)
 		return Palette{
 			Rail:          ui.RGB(24, 29, 36),
 			Sidebar:       t.Background,
-			Chat:          ui.RGB(40, 47, 56),
-			Header:        ui.RGB(33, 39, 46),
+			Chat:          chatSurf,
+			Header:        chatSurf,
 			Border:        ui.RGBA(255, 255, 255, 0.09),
 			Hover:         t.Hover,
 			Selected:      ui.RGB(44, 66, 98),
@@ -219,23 +229,26 @@ func buildPalette(t gfx.Theme, dark bool, scheme string) Palette {
 			SecondaryText: t.MutedForeground,
 			MutedAvatar:   t.CardElevated,
 			AvatarText:    ui.RGB(225, 231, 241),
-			Incoming:      ui.RGB(53, 62, 73),
-			Own:           ui.RGB(35, 56, 82),
+			Incoming:      ui.RGB(52, 60, 71),
+			Own:           ui.RGB(32, 62, 99),
 			BubbleBorder:  ui.RGBA(255, 255, 255, 0.06),
-			FileCard:      ui.RGB(42, 50, 63),
-			FileBorder:    ui.RGBA(172, 196, 230, 0.15),
-			BadgeMutedBg:  ui.RGB(56, 66, 78),
+			OwnBorder:     ui.RGBA(96, 165, 250, 0.22),
+			FileCard:      ui.RGB(44, 52, 64),
+			FileBorder:    ui.RGBA(172, 196, 230, 0.14),
+			BadgeMutedBg:  ui.RGB(88, 95, 105),
+			BadgeMutedFg:  ui.RGB(228, 232, 238),
 			Success:       ui.RGB(55, 197, 118),
 			Danger:        ui.RGB(255, 112, 116),
 			Warning:       ui.RGB(245, 158, 11),
 		}
 	}
 
+	chatSurf := ui.RGB(250, 251, 253)
 	return Palette{
 		Rail:          ui.RGB(227, 233, 241),
 		Sidebar:       ui.RGB(240, 243, 248),
-		Chat:          ui.RGB(251, 252, 254),
-		Header:        ui.RGB(251, 252, 254),
+		Chat:          chatSurf,
+		Header:        chatSurf,
 		Border:        ui.RGB(231, 235, 241),
 		Hover:         ui.RGB(231, 236, 244),
 		Selected:      ui.RGB(215, 230, 253),
@@ -245,11 +258,13 @@ func buildPalette(t gfx.Theme, dark bool, scheme string) Palette {
 		MutedAvatar:   ui.RGB(233, 238, 246),
 		AvatarText:    ui.RGB(60, 72, 92),
 		Incoming:      ui.RGB(237, 241, 247),
-		Own:           ui.RGB(229, 239, 255),
-		BubbleBorder:  ui.RGBA(30, 64, 120, 0.05),
-		FileCard:      ui.RGB(242, 247, 255),
+		Own:           ui.RGB(222, 236, 255),
+		BubbleBorder:  ui.RGBA(30, 64, 120, 0.06),
+		OwnBorder:     ui.RGBA(59, 130, 246, 0.20),
+		FileCard:      ui.RGB(244, 248, 255),
 		FileBorder:    ui.RGB(208, 224, 250),
-		BadgeMutedBg:  ui.RGB(220, 226, 236),
+		BadgeMutedBg:  ui.RGB(168, 175, 185),
+		BadgeMutedFg:  ui.RGB(255, 255, 255),
 		Success:       ui.RGB(34, 176, 94),
 		Danger:        ui.RGB(220, 48, 54),
 		Warning:       ui.RGB(217, 119, 6),

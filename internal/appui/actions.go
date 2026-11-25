@@ -375,6 +375,17 @@ func (m *Model) TotalUnreadCount() int {
 	return total
 }
 
+// TotalMutedUnreadCount returns the total unread message count across muted chats.
+func (m *Model) TotalMutedUnreadCount() int {
+	total := 0
+	for _, ch := range m.Chats {
+		if ch.UnreadCount > 0 && ch.IsMuted {
+			total += ch.UnreadCount
+		}
+	}
+	return total
+}
+
 // SharedFiles returns attachments matching a chat scope (chatID == 0 for all chats),
 // category filter ("All", "Images", "Files", "Webxdc"), and filename/sender query.
 func (m *Model) SharedFiles(chatID int, filter, query string) []SharedFileItem {

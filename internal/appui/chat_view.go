@@ -310,15 +310,29 @@ func (m *Model) renderMessage(c ui.C, chat *dc.ChatEntry, msg dc.Message, groupe
 		return
 	}
 
-	// GoIM-style Bubble layout:
-	// - Incoming: left avatar + sender name (in groups) + rounded card bubble + inline timestamp to the right
-	// - Outgoing: inline timestamp/status to the left + slate/sky-blue tinted bubble + right self avatar
+	// GoIM-style Bubble layout with clear incoming/outgoing distinction and zero double-nested boxes:
+	// - Pure text: avatar bottom-aligned alongside bubble, inline timestamp beside bubble
+	// - Images: standalone rounded image directly on chat canvas (+ optional sleek caption below)
+	// - File / Webxdc: standalone crisp file card directly on chat canvas (+ optional text bubble above)
 	metaTime := msg.TimeLabel()
 	if msg.IsEdited {
 		metaTime += " · edited"
 	}
-	if status := msg.StatusLabel(); status != "" && status != "Delivered" {
-		metaTime += " · " + status
+	statusGlyph := ""
+	statusColor := pal.SecondaryText
+	if msg.IsOutgoing {
+		switch msg.State {
+		case dc.MsgStateOutPending, dc.MsgStateOutPreparing:
+			statusGlyph = "Sending"
+		case dc.MsgStateOutFailed:
+			statusGlyph = "Failed"
+			statusColor = pal.Danger
+		case dc.MsgStateOutMdnRcvd:
+			statusGlyph = "✓✓"
+			statusColor = pal.SelectedText
+		case dc.MsgStateOutDelivered:
+			statusGlyph = "✓"
+		}
 	}
 
 	selfName := "You"
@@ -327,95 +341,138 @@ func (m *Model) renderMessage(c ui.C, chat *dc.ChatEntry, msg dc.Message, groupe
 	}
 
 	bmp, hasBmp := m.MessageBitmap(msg)
-	isPureFileCard := !hasBmp && (msg.ViewType == "Webxdc" || msg.FileName != "") && msg.Text == "" && msg.Quote == nil
+	hasFileCard := !hasBmp && (msg.ViewType == "Webxdc" || msg.FileName != "")
+	isRichMedia := hasBmp || hasFileCard
 
 	var bubbleHit ui.Box
 
-	renderContent := func(cc ui.C) {
-		if hasBmp && msg.Text == "" && msg.Quote == nil {
-			w, h := fitImageSize(bmp, 320, 220)
-			imgBox := ui.Row(cc).Size(w, h).Radius(RadiusControl).Clip().Background(pal.MutedAvatar).
-				Hit(ui.ID(cc), "Preview "+msg.FileName)
-			imgBox.Children(func() {
-				ui.Image(cc, bmp).Size(w, h).Radius(RadiusControl)
-			})
-			if imgBox.Clicked() {
-				copied := msg
-				cc.After(func() { m.OpenPreviewForMessage(copied) })
+	renderTimeMeta := func(cc ui.C) {
+		if metaTime == "" && statusGlyph == "" {
+			return
+		}
+		ui.Row(cc).Gap(4).Items(ui.Center).Shrink(0).Children(func() {
+			if msg.IsOutgoing && statusGlyph != "" {
+				ui.Text(cc, statusGlyph).FontSize(10.5).Weight(gfx.WeightMedium).Color(statusColor)
 			}
-			bubbleHit = imgBox
-			return
-		}
+			if metaTime != "" {
+				ui.Text(cc, metaTime).FontSize(10.5).Color(pal.SecondaryText)
+			}
+		})
+	}
 
-		if isPureFileCard {
-			bubbleHit = m.renderFileCard(cc, msg, false)
-			return
-		}
-
+	renderTextBubble := func(cc ui.C, text string, quote *dc.Quote, maxW float32) ui.Box {
 		bg := pal.Incoming
+		borderCol := pal.BubbleBorder
 		if msg.IsOutgoing {
 			bg = pal.Own
+			borderCol = pal.OwnBorder
 		}
-		bubbleHit = ui.Column(cc).MaxWidth(470).PadSides(10, 14, 10, 14).Radius(RadiusControl).
-			Background(bg).Border(1, pal.BubbleBorder).Gap(8).
+		box := ui.Column(cc).MaxWidth(maxW).PadSides(9, 13, 9, 13).Radius(RadiusControl).
+			Background(bg).Border(1, borderCol).Gap(6).
 			Hit(ui.ID(cc), fmt.Sprintf("Message %d", msg.ID))
-		bubbleHit.Children(func() {
-			if msg.Quote != nil {
-				ui.Row(cc).Gap(8).Pad(7).Radius(8).Background(pal.Header.WithAlpha(0.7)).Items(ui.Center).Children(func() {
-					ui.Row(cc).Width(3).Height(28).Radius(2).Background(theme.Primary).Shrink(0)
+		box.Children(func() {
+			if quote != nil {
+				ui.Row(cc).Gap(8).Pad(7).Radius(8).Background(pal.Chat.WithAlpha(0.55)).Items(ui.Center).Children(func() {
+					ui.Row(cc).Width(3).Height(26).Radius(1.5).Background(theme.Primary).Shrink(0)
 					ui.Column(cc).Grow(1).MinWidth(0).Gap(1).Children(func() {
-						ui.Text(cc, msg.Quote.AuthorName).FontSize(11.5).Weight(gfx.WeightSemibold).Color(pal.SelectedText)
-						ui.Text(cc, msg.Quote.Text).FontSize(12).Color(pal.SecondaryText).Ellipsis()
+						ui.Text(cc, quote.AuthorName).FontSize(11.5).Weight(gfx.WeightSemibold).Color(pal.SelectedText)
+						ui.Text(cc, quote.Text).FontSize(12).Color(pal.SecondaryText).Ellipsis()
 					})
 				})
 			}
-			if hasBmp {
-				w, h := fitImageSize(bmp, 320, 210)
-				imgBox := ui.Row(cc).Size(w, h).Radius(8).Clip().Background(pal.MutedAvatar).
-					Hit(ui.ID(cc), "Preview "+msg.FileName)
+			if text != "" {
+				ui.Wrap(cc, text).FontSize(13.5).Color(theme.Foreground).LineHeight(20)
+			}
+		})
+		return box
+	}
+
+	renderMediaOrBubble := func(cc ui.C) {
+		// 1. Standalone Image (GoIM style: clean rounded image on canvas, optional caption below)
+		if hasBmp {
+			w, h := fitImageSize(bmp, 310, 175)
+			colAlign := ui.Start
+			if msg.IsOutgoing {
+				colAlign = ui.End
+			}
+			ui.Column(cc).Gap(6).Items(colAlign).Children(func() {
+				if msg.Quote != nil {
+					renderTextBubble(cc, "", msg.Quote, w)
+				}
+				imgBox := ui.Row(cc).Size(w, h).Radius(RadiusControl).Clip().Background(pal.MutedAvatar).
+					Border(1, pal.BubbleBorder).Hit(ui.ID(cc), "Preview "+msg.FileName)
 				imgBox.Children(func() {
-					ui.Image(cc, bmp).Size(w, h).Radius(8)
+					ui.Image(cc, bmp).Size(w, h).Radius(RadiusControl)
 				})
 				if imgBox.Clicked() {
 					copied := msg
 					cc.After(func() { m.OpenPreviewForMessage(copied) })
 				}
+				bubbleHit = imgBox
+				if msg.Text != "" {
+					renderTextBubble(cc, msg.Text, nil, w)
+				}
+			})
+			return
+		}
+
+		// 2. Standalone File / Webxdc Card (GoIM style: zero outer bubble wrapping the file card!)
+		if hasFileCard {
+			colAlign := ui.Start
+			if msg.IsOutgoing {
+				colAlign = ui.End
 			}
-			if msg.Text != "" {
-				ui.Wrap(cc, msg.Text).FontSize(13.5).Color(theme.Foreground).LineHeight(20)
-			}
-			if msg.ViewType == "Webxdc" || (msg.FileName != "" && !hasBmp) {
-				m.renderFileCard(cc, msg, true)
-			}
-		})
+			ui.Column(cc).Gap(6).Items(colAlign).Children(func() {
+				if msg.Text != "" || msg.Quote != nil {
+					renderTextBubble(cc, msg.Text, msg.Quote, 440)
+				}
+				bubbleHit = m.renderFileCard(cc, msg)
+			})
+			return
+		}
+
+		// 3. Clean Text Bubble
+		bubbleHit = renderTextBubble(cc, msg.Text, msg.Quote, 460)
+	}
+
+	rowAlign := ui.End
+	if isRichMedia {
+		rowAlign = ui.Start
 	}
 
 	if msg.IsOutgoing {
-		ui.Row(c.KeyInt(msg.ID)).FillWidth().Justify(ui.End).Items(ui.End).Gap(9).Children(func() {
+		ui.Row(c.KeyInt(msg.ID)).FillWidth().Justify(ui.End).Items(rowAlign).Gap(9).Children(func() {
 			ui.Column(c).Items(ui.End).Gap(4).Children(func() {
-				ui.Row(c).Items(ui.End).Gap(8).Children(func() {
-					if metaTime != "" {
-						ui.Text(c, metaTime).FontSize(10.5).Color(pal.SecondaryText).Shrink(0)
-					}
-					renderContent(c)
-				})
+				if isRichMedia {
+					renderMediaOrBubble(c)
+					renderTimeMeta(c)
+				} else {
+					ui.Row(c).Items(ui.End).Gap(8).Children(func() {
+						renderTimeMeta(c)
+						renderMediaOrBubble(c)
+					})
+				}
 				m.reactionPills(c, msg)
 			})
 			m.renderAvatar(c, selfName, "", 34, false, pal.Chat)
 		})
 	} else {
-		ui.Row(c.KeyInt(msg.ID)).FillWidth().Justify(ui.Start).Items(ui.Start).Gap(10).Children(func() {
+		_, senderTint := avatarAccentColor(msg.DisplaySender(), m.DarkMode)
+		ui.Row(c.KeyInt(msg.ID)).FillWidth().Justify(ui.Start).Items(rowAlign).Gap(10).Children(func() {
 			m.renderAvatar(c, msg.DisplaySender(), "", 34, false, pal.Chat)
 			ui.Column(c).Items(ui.Start).Gap(4).Children(func() {
 				if !grouped && chat.Kind == dc.ChatGroup {
-					ui.Text(c, msg.DisplaySender()).FontSize(11.5).Color(pal.SecondaryText).Ellipsis()
+					ui.Text(c, msg.DisplaySender()).FontSize(11.5).Weight(gfx.WeightMedium).Color(senderTint).Ellipsis()
 				}
-				ui.Row(c).Items(ui.End).Gap(8).Children(func() {
-					renderContent(c)
-					if metaTime != "" {
-						ui.Text(c, metaTime).FontSize(10.5).Color(pal.SecondaryText).Shrink(0)
-					}
-				})
+				if isRichMedia {
+					renderMediaOrBubble(c)
+					renderTimeMeta(c)
+				} else {
+					ui.Row(c).Items(ui.End).Gap(8).Children(func() {
+						renderMediaOrBubble(c)
+						renderTimeMeta(c)
+					})
+				}
 				m.reactionPills(c, msg)
 			})
 		})
@@ -426,7 +483,7 @@ func (m *Model) renderMessage(c ui.C, chat *dc.ChatEntry, msg dc.Message, groupe
 	}
 }
 
-func (m *Model) renderFileCard(c ui.C, msg dc.Message, fillBubble bool) ui.Box {
+func (m *Model) renderFileCard(c ui.C, msg dc.Message) ui.Box {
 	pal := m.Palette
 	theme := c.Theme()
 	_, tag, _, _ := fileBadgeVisual(msg.FileName, msg.ViewType, m.DarkMode)
@@ -446,15 +503,10 @@ func (m *Model) renderFileCard(c ui.C, msg dc.Message, fillBubble bool) ui.Box {
 		avail = "Delta Chat attachment"
 	}
 
-	card := ui.Column(c).MinWidth(300).Pad(12).Radius(RadiusControl).Gap(8).
+	card := ui.Column(c).Width(336).Pad(13).Radius(RadiusControl).Gap(9).
 		Background(pal.FileCard).Border(1, pal.FileBorder).
 		Hover(ui.Look{}.Background(pal.Hover)).
 		Hit(ui.ID(c), btnLabel)
-	if fillBubble {
-		card = card.FillWidth()
-	} else {
-		card = card.Width(332)
-	}
 	card.Children(func() {
 		ui.Row(c).FillWidth().Items(ui.Center).Gap(11).Children(func() {
 			renderFileBadge(c, msg.FileName, msg.ViewType, m.DarkMode, 40, 20)
@@ -639,17 +691,17 @@ func (m *Model) dockedComposer(c ui.C) {
 			})
 		})
 
-		// Composer Editor Input (seamlessly docked into the chat surface)
-		ui.Row(c).FillWidth().PadSides(2, 16, 4, 16).Children(func() {
+		// Composer Editor Input (GoIM-proportioned spacious docked typing area)
+		ui.Column(c).FillWidth().Height(ComposerEditorHeight).PadSides(2, 16, 4, 16).Justify(ui.Start).Children(func() {
 			if m.EnterToSend {
 				field := ui.TextField(c, &m.Draft, "Message", "Write a message...").
-					FillWidth().Height(46).Background(gfx.Color{}).Border(0, gfx.Color{}).Shadow(gfx.ShadowNone)
+					FillWidth().Height(40).Background(gfx.Color{}).Border(0, gfx.Color{}).Shadow(gfx.ShadowNone)
 				if field.Submitted() {
 					m.SendDraft()
 				}
 			} else {
 				ui.TextArea(c, &m.Draft, "Message", "Write a message...").
-					FillWidth().Height(ComposerEditorHeight).Background(gfx.Color{}).Border(0, gfx.Color{}).Shadow(gfx.ShadowNone)
+					FillWidth().Height(ComposerEditorHeight - 6).Background(gfx.Color{}).Border(0, gfx.Color{}).Shadow(gfx.ShadowNone)
 			}
 		})
 

@@ -262,7 +262,7 @@ func NewDemoModel() *Model {
 		{
 			ID: 13, Name: "Linux Desktop Channel", Kind: dc.ChatChannel, ChatType: "Broadcast",
 			LastMessage: "Vulkan + CPU fallback verified on Debian X11",
-			UnreadCount: 0, Timestamp: now - 7200, IsMuted: true,
+			UnreadCount: 18, Timestamp: now - 7200, IsMuted: true,
 		},
 	}
 
@@ -282,23 +282,24 @@ func NewDemoModel() *Model {
 		},
 		{
 			ID: 1003, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
-			Text:      "Click the image to zoom in, or drag & drop multiple photos directly into the window.",
 			Timestamp: now - 300, ViewType: "Image", FilePath: "demo://preview-desktop.png", FileName: "preview-desktop.png",
 			FileBytes: 184320, State: dc.MsgStateInFresh,
-			Quote:     &dc.Quote{MessageID: 1002, AuthorName: "Alice", Text: "Unified Telegram-style UI with direct in-app previews..."},
-			Reactions: []dc.Reaction{{Emoji: "🔥", Count: 3}},
 		},
 		{
 			ID: 1004, ChatID: 10, SenderContactID: 2, SenderName: "Bob",
-			Text:      "Release notes (click to preview rendered Markdown inside the app):",
 			Timestamp: now - 120, ViewType: "File", FilePath: "demo://release-notes.md", FileName: "release-notes.md",
 			FileBytes: 1024, State: dc.MsgStateInFresh,
 		},
 		{
 			ID: 1005, ChatID: 10, SenderContactID: 1, SenderName: "Alice", IsOutgoing: true,
-			Text:      "Looks super crisp! Attached the cross-platform build metrics table:",
+			Text:      "Looks super crisp! Attached the build metrics table:",
 			Timestamp: now - 60, ViewType: "File", FilePath: "demo://build-metrics.csv", FileName: "build-metrics.csv",
 			FileBytes: 512, State: dc.MsgStateOutMdnRcvd,
+		},
+		{
+			ID: 1006, ChatID: 10, SenderContactID: 3, SenderName: "Elena",
+			Text:      "Confirmed — muted chats show neutral gray badges while active chats stay blue.",
+			Timestamp: now - 25, ViewType: "Text", State: dc.MsgStateInFresh,
 		},
 	}
 
@@ -403,7 +404,7 @@ func (m *Model) FilteredChats() []dc.ChatEntry {
 	for _, ch := range m.Chats {
 		switch m.SidebarFilter {
 		case "Unread":
-			if ch.UnreadCount == 0 {
+			if ch.UnreadCount == 0 || ch.IsMuted {
 				continue
 			}
 		case "Pinned":

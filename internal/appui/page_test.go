@@ -202,7 +202,7 @@ func TestGoIMNavigationRailContactsFilesAndColorSchemes(t *testing.T) {
 		t.Fatalf("expected >= 3 shared files across chats, got %d", len(m.SharedFiles(0, "All", "")))
 	}
 
-	// Color scheme switching preserves dark mode
+	// Color scheme switching preserves dark mode and muted badge palette stays distinct from Primary
 	m.SetDarkMode(true)
 	m.SetColorScheme(SchemePine)
 	inv.Invalidate()
@@ -211,6 +211,12 @@ func TestGoIMNavigationRailContactsFilesAndColorSchemes(t *testing.T) {
 	}
 	if !m.DarkMode || m.ColorScheme != SchemePine {
 		t.Fatalf("expected dark+pine, got dark=%v scheme=%q", m.DarkMode, m.ColorScheme)
+	}
+	if m.TotalUnreadCount() == 0 || m.TotalMutedUnreadCount() == 0 {
+		t.Fatalf("expected both active and muted unread counts in demo model, got active=%d muted=%d", m.TotalUnreadCount(), m.TotalMutedUnreadCount())
+	}
+	if m.Palette.BadgeMutedBg == m.Theme.Primary {
+		t.Fatal("muted unread badge background must stay neutral gray and never equal primary accent")
 	}
 }
 

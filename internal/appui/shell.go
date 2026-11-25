@@ -209,12 +209,21 @@ func (m *Model) navRailPane(c ui.C) {
 	}
 
 	unread := m.TotalUnreadCount()
+	mutedUnread := m.TotalMutedUnreadCount()
 	unreadBadge := ""
+	unreadMutedOnly := false
 	if unread > 0 {
 		if unread > 99 {
 			unreadBadge = "99+"
 		} else {
 			unreadBadge = fmt.Sprintf("%d", unread)
+		}
+	} else if mutedUnread > 0 {
+		unreadMutedOnly = true
+		if mutedUnread > 99 {
+			unreadBadge = "99+"
+		} else {
+			unreadBadge = fmt.Sprintf("%d", mutedUnread)
 		}
 	}
 
@@ -232,20 +241,20 @@ func (m *Model) navRailPane(c ui.C) {
 
 		ui.Row(c).Height(6)
 
-		if m.railButton(c, IconMessage, "Chats", "Chats", m.Section == SectionChats, unreadBadge).Clicked() {
+		if m.railButton(c, IconMessage, "Chats", "Chats", m.Section == SectionChats, unreadBadge, unreadMutedOnly).Clicked() {
 			m.Section = SectionChats
 		}
-		if m.railButton(c, IconUsers, "Contacts", "Contacts", m.Section == SectionContacts, "").Clicked() {
+		if m.railButton(c, IconUsers, "Contacts", "Contacts", m.Section == SectionContacts, "", false).Clicked() {
 			m.Section = SectionContacts
 		}
-		if m.railButton(c, IconFolder, "Files", "Files", m.Section == SectionFiles, "").Clicked() {
+		if m.railButton(c, IconFolder, "Files", "Files", m.Section == SectionFiles, "", false).Clicked() {
 			m.Section = SectionFiles
 		}
 
 		ui.Spacer(c)
 
 		// Bottom utility actions (matching GoIM's Lock / Theme / Settings stack)
-		if m.railButton(c, IconUserPlus, "Pair", "Invite / Pair", m.InviteOpen, "").Clicked() {
+		if m.railButton(c, IconUserPlus, "Pair", "Invite / Pair", m.InviteOpen, "", false).Clicked() {
 			m.InviteOpen = true
 		}
 
@@ -255,11 +264,11 @@ func (m *Model) navRailPane(c ui.C) {
 			themeIcon = IconSun
 			themeAccessible = "Light"
 		}
-		if m.railButton(c, themeIcon, "Theme", themeAccessible, false, "").Clicked() {
+		if m.railButton(c, themeIcon, "Theme", themeAccessible, false, "", false).Clicked() {
 			m.SetDarkMode(!m.DarkMode)
 		}
 
-		if m.railButton(c, IconSettings, "Settings", "Settings", m.Section == SectionSettings, "").Clicked() {
+		if m.railButton(c, IconSettings, "Settings", "Settings", m.Section == SectionSettings, "", false).Clicked() {
 			if m.Section == SectionSettings {
 				m.Section = SectionChats
 			} else {
@@ -271,7 +280,7 @@ func (m *Model) navRailPane(c ui.C) {
 	})
 }
 
-func (m *Model) railButton(c ui.C, icon gfx.Icon, visualLabel, accessibleLabel string, active bool, badge string) ui.Box {
+func (m *Model) railButton(c ui.C, icon gfx.Icon, visualLabel, accessibleLabel string, active bool, badge string, mutedBadge bool) ui.Box {
 	pal := m.Palette
 	theme := c.Theme()
 
@@ -294,9 +303,15 @@ func (m *Model) railButton(c ui.C, icon gfx.Icon, visualLabel, accessibleLabel s
 				ui.Icon(c, icon).Size(20, 20).Color(fg)
 			})
 			if badge != "" {
+				badgeBg := theme.Primary
+				badgeFg := theme.PrimaryForeground
+				if mutedBadge {
+					badgeBg = pal.BadgeMutedBg
+					badgeFg = pal.BadgeMutedFg
+				}
 				ui.Row(c).MinWidth(17).Height(17).PadX(4).Radius(8.5).Absolute().Right(0).Top(0).
-					Background(theme.Primary).Center().Children(func() {
-					ui.Text(c, badge).FontSize(9.5).Weight(gfx.WeightSemibold).Color(theme.PrimaryForeground)
+					Background(badgeBg).Center().Children(func() {
+					ui.Text(c, badge).FontSize(9.5).Weight(gfx.WeightSemibold).Color(badgeFg)
 				})
 			}
 		})

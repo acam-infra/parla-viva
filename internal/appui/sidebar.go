@@ -68,7 +68,7 @@ func (m *Model) sidebarPane(c ui.C) {
 func (m *Model) sidebarChatFilters(c ui.C) {
 	unreadCount, pinnedCount := 0, 0
 	for _, ch := range m.Chats {
-		if ch.UnreadCount > 0 {
+		if ch.UnreadCount > 0 && !ch.IsMuted {
 			unreadCount++
 		}
 		if ch.IsPinned {
@@ -83,7 +83,7 @@ func (m *Model) sidebarChatFilters(c ui.C) {
 		{"Unread", fmt.Sprintf("Unread %d", unreadCount)},
 		{"Pinned", fmt.Sprintf("Pinned %d", pinnedCount)},
 	}
-	ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Gap(4).Items(ui.Center).Children(func() {
 		for _, it := range items {
 			item := it
 			active := m.SidebarFilter == item.key
@@ -93,11 +93,11 @@ func (m *Model) sidebarChatFilters(c ui.C) {
 				bg = m.Palette.Selected
 				fg = m.Palette.SelectedText
 			}
-			pill := ui.Row(c.Key("cf-"+item.key)).Height(26).PadX(10).Radius(13).Items(ui.Center).
+			pill := ui.Row(c.Key("cf-"+item.key)).Height(24).PadX(9).Radius(12).Items(ui.Center).
 				Background(bg).Hover(ui.Look{}.Background(m.Palette.Hover)).
 				Hit(ui.ID(c), "Filter "+item.key)
 			pill.Children(func() {
-				ui.Text(c, item.label).FontSize(11.5).Weight(gfx.WeightMedium).Color(fg)
+				ui.Text(c, item.label).FontSize(11).Weight(gfx.WeightMedium).Color(fg)
 			})
 			if pill.Clicked() {
 				m.SidebarFilter = item.key
@@ -173,7 +173,7 @@ func (m *Model) chatsSidebarList(c ui.C) {
 		}
 
 		row := ui.Row(c.KeyInt(chat.ID)).FillWidth().Height(SidebarConversationHeight).
-			PadSides(8, 8, 8, 8).Gap(10).Radius(RadiusCard).
+			PadSides(8, 10, 8, 10).Gap(10).Radius(RadiusControl).
 			Items(ui.Center).Background(bg).Hover(ui.Look{}.Background(hover)).
 			Hit(ui.ID(c), chat.Name)
 		row.Children(func() {
@@ -181,24 +181,34 @@ func (m *Model) chatsSidebarList(c ui.C) {
 			if active {
 				ring = pal.Selected
 			}
-			m.renderAvatar(c, chat.Name, chat.AvatarPath, 38, chat.WasSeenRecently, ring)
+			// Show green presence dot only on active unmuted direct/group chats (never noisy green dots on muted channels or Saved Messages)
+			showOnline := chat.WasSeenRecently && !chat.IsMuted && chat.Kind != dc.ChatSavedMessages && chat.Kind != dc.ChatChannel
+			m.renderAvatar(c, chat.Name, chat.AvatarPath, 38, showOnline, ring)
 
-			ui.Column(c).Grow(1).MinWidth(0).Clip().Gap(3).Justify(ui.Center).Children(func() {
-				// Row 1: Chat title + Pin + Mute + right-aligned timestamp (GoIM style)
+			ui.Column(c).Grow(1).MinWidth(0).Clip().Gap(4).Justify(ui.Center).Children(func() {
+				// Row 1: Chat title (+ inline mute bell) + pin icon + right-aligned timestamp (GoIM style)
 				ui.Row(c).FillWidth().Gap(5).Items(ui.Center).Children(func() {
-					ui.Text(c, chat.Name).FontSize(13.5).Weight(gfx.WeightMedium).Ellipsis().Grow(1)
+					ui.Row(c).Grow(1).MinWidth(0).Gap(5).Items(ui.Center).Children(func() {
+						titleWeight := gfx.WeightSemibold
+						titleColor := theme.Foreground
+						if chat.IsMuted {
+							titleWeight = gfx.WeightMedium
+							titleColor = theme.Foreground.Mix(pal.SecondaryText, 0.18)
+						}
+						ui.Text(c, chat.Name).FontSize(13.5).Weight(titleWeight).Color(titleColor).Ellipsis().Shrink(1)
+						if chat.IsMuted {
+							ui.Icon(c, IconBellOff).Size(12.5, 12.5).Color(pal.SecondaryText)
+						}
+					})
 					if chat.IsPinned {
 						ui.Icon(c, IconPin).Size(12, 12).Color(pal.SecondaryText)
-					}
-					if chat.IsMuted {
-						ui.Icon(c, IconBellOff).Size(12, 12).Color(pal.SecondaryText)
 					}
 					if ts := chat.ShortTimeLabel(); ts != "" {
 						ui.Text(c, ts).FontSize(10.5).Color(pal.SecondaryText).Shrink(0)
 					}
 				})
 
-				// Row 2: Message preview + right-aligned rounded unread badge
+				// Row 2: Message preview + right-aligned unread pill (active = primary blue, muted = neutral gray!)
 				previewLine := chat.LastMessage
 				if chat.SummaryPrefix != "" {
 					previewLine = chat.SummaryPrefix + ": " + previewLine
@@ -209,15 +219,19 @@ func (m *Model) chatsSidebarList(c ui.C) {
 				ui.Row(c).FillWidth().Gap(6).Items(ui.Center).Children(func() {
 					ui.Text(c, previewLine).FontSize(11.5).Color(pal.SecondaryText).Ellipsis().Grow(1)
 					if chat.UnreadCount > 0 {
+						badgeText := fmt.Sprintf("%d", chat.UnreadCount)
+						if chat.UnreadCount > 999 {
+							badgeText = "999+"
+						}
 						badgeBg := theme.Primary
 						badgeFg := theme.PrimaryForeground
 						if chat.IsMuted {
 							badgeBg = pal.BadgeMutedBg
-							badgeFg = pal.SecondaryText
+							badgeFg = pal.BadgeMutedFg
 						}
 						ui.Row(c).Shrink(0).MinWidth(20).Height(19).PadX(6).Radius(9.5).Center().
 							Background(badgeBg).Children(func() {
-							ui.Text(c, fmt.Sprintf("%d", chat.UnreadCount)).FontSize(10.5).Weight(gfx.WeightSemibold).Color(badgeFg)
+							ui.Text(c, badgeText).FontSize(10.5).Weight(gfx.WeightSemibold).Color(badgeFg)
 						})
 					}
 				})
