@@ -142,8 +142,11 @@ func TestAccountsSettingsBackupAndGallery(t *testing.T) {
 		t.Fatalf("ActiveAcctID = %d, want 2", m.ActiveAcctID)
 	}
 
-	// Open Settings and create/verify SafeStore backup
+	// Open Settings workspace and create/verify SafeStore backup
 	clickControl(t, driver, "Settings")
+	if m.Section != SectionSettings {
+		t.Fatalf("expected SectionSettings, got %q", m.Section)
+	}
 	m.BackupPassword = "test-passphrase-2026"
 	inv.Invalidate()
 	if err := driver.Pump(); err != nil {
@@ -158,18 +161,62 @@ func TestAccountsSettingsBackupAndGallery(t *testing.T) {
 		t.Fatalf("unexpected verify status: %q", m.BackupStatus)
 	}
 	clickControl(t, driver, "Done")
+	if m.Section != SectionChats {
+		t.Fatalf("expected return to SectionChats after Done, got %q", m.Section)
+	}
 
-	// Open Gallery
-	clickControl(t, driver, "Gallery")
+	// Open GoIM-style right docked Chat Files pane
+	clickControl(t, driver, "Chat Files")
+	if !m.ChatFilesOpen {
+		t.Fatal("expected ChatFilesOpen = true")
+	}
 	if len(m.GalleryItems()) < 3 {
 		t.Fatalf("expected >= 3 gallery items, got %d", len(m.GalleryItems()))
 	}
-	clickControl(t, driver, "Close")
+	clickControl(t, driver, "Close Chat Files")
+	if m.ChatFilesOpen {
+		t.Fatal("expected ChatFilesOpen = false after close")
+	}
+}
+
+func TestGoIMNavigationRailContactsFilesAndColorSchemes(t *testing.T) {
+	m := NewDemoModel()
+	driver, inv := openDriver(t, m)
+
+	// Switch to Contacts section and start chat with selected contact
+	clickControl(t, driver, "Contacts")
+	if m.Section != SectionContacts {
+		t.Fatalf("expected SectionContacts, got %q", m.Section)
+	}
+	clickControl(t, driver, "Send Message")
+	if m.Section != SectionChats {
+		t.Fatalf("expected Send Message to switch to SectionChats, got %q", m.Section)
+	}
+
+	// Switch to Files & Media table section
+	clickControl(t, driver, "Files")
+	if m.Section != SectionFiles {
+		t.Fatalf("expected SectionFiles, got %q", m.Section)
+	}
+	if len(m.SharedFiles(0, "All", "")) < 3 {
+		t.Fatalf("expected >= 3 shared files across chats, got %d", len(m.SharedFiles(0, "All", "")))
+	}
+
+	// Color scheme switching preserves dark mode
+	m.SetDarkMode(true)
+	m.SetColorScheme(SchemePine)
+	inv.Invalidate()
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.DarkMode || m.ColorScheme != SchemePine {
+		t.Fatalf("expected dark+pine, got dark=%v scheme=%q", m.DarkMode, m.ColorScheme)
+	}
 }
 
 func TestDynamicSidebarPinnedAndInteractiveFlows(t *testing.T) {
 	m := NewDemoModel()
-	// Stress test with 25 chats and ultra-long titles/URLs to ensure sidebar stays strictly pinned.
+	// Stress test with 25 chats and ultra-long titles/URLs to ensure rail + sidebar stay strictly pinned.
 	for i := 0; i < 20; i++ {
 		m.Chats = append(m.Chats, dc.ChatEntry{
 			ID:          100 + i,
@@ -184,14 +231,18 @@ func TestDynamicSidebarPinnedAndInteractiveFlows(t *testing.T) {
 		t.Helper()
 		settings := findControl(t, driver, "Settings").Bounds
 		accounts := findControl(t, driver, "Accounts").Bounds
-		if settings.X+settings.Width > 340 {
-			t.Fatalf("[%s] sidebar Settings drifted right: %+v", step, settings)
+		newBtn := findControl(t, driver, "New").Bounds
+		if settings.X+settings.Width > RailWidth+4 {
+			t.Fatalf("[%s] rail Settings drifted right: %+v", step, settings)
 		}
-		if accounts.X+accounts.Width > 340 {
-			t.Fatalf("[%s] sidebar Accounts drifted right: %+v", step, accounts)
+		if accounts.X+accounts.Width > RailWidth+4 {
+			t.Fatalf("[%s] rail Accounts drifted right: %+v", step, accounts)
 		}
-		if accounts.Y < 700 || accounts.Y+accounts.Height > 780 {
-			t.Fatalf("[%s] sidebar Accounts not pinned at bottom of 780px window: %+v", step, accounts)
+		if settings.Y < 680 || settings.Y+settings.Height > 780 {
+			t.Fatalf("[%s] rail Settings not pinned near bottom of 780px window: %+v", step, settings)
+		}
+		if newBtn.X < RailWidth-2 || newBtn.X+newBtn.Width > RailWidth+SidebarDefaultWidth+40 {
+			t.Fatalf("[%s] sidebar New button drifted out of sidebar bounds: %+v", step, newBtn)
 		}
 	}
 

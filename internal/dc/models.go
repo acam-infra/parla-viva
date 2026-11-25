@@ -42,6 +42,44 @@ type Account struct {
 	UnreadCount int    `json:"-"`
 }
 
+// Contact represents a Delta Chat address-book contact returned by get_contacts.
+type Contact struct {
+	ID              int    `json:"id"`
+	Address         string `json:"address"`
+	Name            string `json:"name"`
+	DisplayName     string `json:"displayName"`
+	AuthName        string `json:"authName"`
+	Color           string `json:"color"`
+	ProfileImage    string `json:"profileImage"`
+	IsVerified      bool   `json:"isVerified"`
+	IsBot           bool   `json:"isBot"`
+	IsBlocked       bool   `json:"isBlocked"`
+	WasSeenRecently bool   `json:"wasSeenRecently"`
+	LastSeen        int64  `json:"lastSeen"`
+	Status          string `json:"status"`
+}
+
+// DisplayLabel returns the preferred human-readable name for a contact.
+func (c Contact) DisplayLabel() string {
+	switch {
+	case c.DisplayName != "":
+		return c.DisplayName
+	case c.Name != "":
+		return c.Name
+	case c.AuthName != "":
+		return c.AuthName
+	case c.Address != "":
+		return c.Address
+	default:
+		return "Contact"
+	}
+}
+
+// Initials returns up to two uppercase runes for avatar fallback.
+func (c Contact) Initials() string {
+	return initialsFromName(c.DisplayLabel())
+}
+
 // ChatEntry is a sidebar chatlist item parsed from get_chatlist_items_by_entries.
 type ChatEntry struct {
 	ID               int

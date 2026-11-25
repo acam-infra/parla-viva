@@ -52,26 +52,68 @@ func LoadBitmap(path string, maxDim int) (gfx.Bitmap, bool) {
 	return imageToBitmap(img, maxDim), true
 }
 
-// DemoGradientBitmap creates a crisp in-memory sample image bitmap for offline preview & tests.
-func DemoGradientBitmap(w, h int, seed byte) gfx.Bitmap {
-	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			off := y*rgba.Stride + x*4
-			rgba.Pix[off+0] = byte((x*255/max(w, 1) + int(seed)*37) % 256)
-			rgba.Pix[off+1] = byte((y*255/max(h, 1) + int(seed)*73) % 256)
-			rgba.Pix[off+2] = byte((180 + int(seed)*29) % 256)
-			rgba.Pix[off+3] = 255
+// BitmapFromRGBA converts straight RGBA pixel data into Viva's premultiplied BGRA gfx.Bitmap.
+func BitmapFromRGBA(rgba []byte, w, h int) gfx.Bitmap {
+	if w <= 0 || h <= 0 || len(rgba) < w*h*4 {
+		return gfx.Bitmap{}
+	}
+	pix := make([]byte, w*h*4)
+	for i := 0; i < w*h*4; i += 4 {
+		r, g, b, a := rgba[i], rgba[i+1], rgba[i+2], rgba[i+3]
+		if a < 255 {
+			r = byte((uint16(r)*uint16(a) + 127) / 255)
+			g = byte((uint16(g)*uint16(a) + 127) / 255)
+			b = byte((uint16(b)*uint16(a) + 127) / 255)
 		}
+		pix[i+0] = b
+		pix[i+1] = g
+		pix[i+2] = r
+		pix[i+3] = a
 	}
 	return gfx.Bitmap{
-		Pix:     rgba.Pix,
+		Pix:     pix,
 		Width:   w,
 		Height:  h,
-		Stride:  rgba.Stride,
+		Stride:  w * 4,
 		ID:      nextBitmapID.Add(1),
 		Version: 1,
 	}
+}
+
+// DemoGradientBitmap creates a crisp in-memory sample sunset/mountain image bitmap for offline preview & tests.
+func DemoGradientBitmap(w, h int, seed byte) gfx.Bitmap {
+	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		t := float64(y) / float64(max(h-1, 1))
+		for x := 0; x < w; x++ {
+			s := float64(x) / float64(max(w-1, 1))
+			r := byte(min(255, int(44+120*(1-t)+45*s+float64(seed)*7)))
+			g := byte(min(255, int(52+78*(1-t)+30*s)))
+			b := byte(min(255, int(92+68*t+30*(1-s))))
+			// Subtle warm sun disc in upper-right quadrant
+			dx := s - 0.76
+			dy := t - 0.30
+			if dx*dx*1.8+dy*dy < 0.022 {
+				r, g, b = 250, 214, 134
+			}
+			// Mountain ridge silhouette near bottom
+			ridge := 0.64 + 0.08*float64((x*3+int(seed)*17)%19)/19.0
+			if s < 0.45 {
+				ridge -= (0.45 - s) * 0.25
+			} else {
+				ridge -= (s - 0.45) * 0.14
+			}
+			if t > ridge {
+				r, g, b = 36, 44, 66
+			}
+			off := y*rgba.Stride + x*4
+			rgba.Pix[off+0] = r
+			rgba.Pix[off+1] = g
+			rgba.Pix[off+2] = b
+			rgba.Pix[off+3] = 255
+		}
+	}
+	return BitmapFromRGBA(rgba.Pix, w, h)
 }
 
 func imageToBitmap(src image.Image, maxDim int) gfx.Bitmap {
@@ -81,7 +123,6 @@ func imageToBitmap(src image.Image, maxDim int) gfx.Bitmap {
 		return gfx.Bitmap{}
 	}
 	if maxDim > 0 && (w > maxDim || h > maxDim) {
-		// Nearest-neighbor downscale to keep thumbnail memory bounded without extra deps.
 		var nw, nh int
 		if w >= h {
 			nw = maxDim
@@ -98,24 +139,10 @@ func imageToBitmap(src image.Image, maxDim int) gfx.Bitmap {
 				dst.Set(x, y, src.At(sx, sy))
 			}
 		}
-		return gfx.Bitmap{
-			Pix:     dst.Pix,
-			Width:   nw,
-			Height:  nh,
-			Stride:  dst.Stride,
-			ID:      nextBitmapID.Add(1),
-			Version: 1,
-		}
+		return BitmapFromRGBA(dst.Pix, nw, nh)
 	}
 
 	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(rgba, rgba.Bounds(), src, b.Min, draw.Src)
-	return gfx.Bitmap{
-		Pix:     rgba.Pix,
-		Width:   w,
-		Height:  h,
-		Stride:  rgba.Stride,
-		ID:      nextBitmapID.Add(1),
-		Version: 1,
-	}
+	return BitmapFromRGBA(rgba.Pix, w, h)
 }
