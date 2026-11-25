@@ -200,6 +200,26 @@ func (m *Model) TogglePinMessage(chatID, msgID int) {
 	m.Messages[chatID] = msgs
 }
 
+// IsMessageExpanded reports whether a long message has been manually expanded.
+func (m *Model) IsMessageExpanded(msgID int) bool {
+	if m.ExpandedMsgs == nil {
+		return false
+	}
+	return m.ExpandedMsgs[msgID]
+}
+
+// ToggleMessageExpanded toggles the collapsed/expanded state of a long message.
+func (m *Model) ToggleMessageExpanded(msgID int) {
+	if m.ExpandedMsgs == nil {
+		m.ExpandedMsgs = make(map[int]bool)
+	}
+	if m.ExpandedMsgs[msgID] {
+		delete(m.ExpandedMsgs, msgID)
+	} else {
+		m.ExpandedMsgs[msgID] = true
+	}
+}
+
 // ApplyEditMessage updates an outgoing message's text locally and via RPC.
 func (m *Model) ApplyEditMessage(chatID, msgID int, newText string) {
 	msgs := m.Messages[chatID]

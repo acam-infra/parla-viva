@@ -121,6 +121,11 @@ var (
 		gfx.MoveTo(6, 9), gfx.LineTo(12, 15), gfx.LineTo(18, 9),
 	)
 
+	// IconChevronUp is an upward disclosure chevron.
+	IconChevronUp = lucideIcon(
+		gfx.MoveTo(18, 15), gfx.LineTo(12, 9), gfx.LineTo(6, 15),
+	)
+
 	// IconChevronRight is a rightward disclosure/navigation chevron.
 	IconChevronRight = lucideIcon(
 		gfx.MoveTo(9, 6), gfx.LineTo(15, 12), gfx.LineTo(9, 18),

@@ -3,6 +3,8 @@ package appui
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/gfx"
@@ -12,7 +14,167 @@ import (
 	"github.com/acam-infra/parla-viva/internal/preview"
 )
 
-const historyDefaultStep = 30
+const (
+	historyDefaultStep   = 30
+	longMsgTriggerLines  = 8
+	longMsgPreviewLines  = 6
+	longMsgTriggerWeight = 480
+	longMsgPreviewWeight = 340
+	longMsgMinHiddenRune = 24
+	longMsgMinHiddenLine = 2
+)
+
+type messageFoldInfo struct {
+	Collapsible bool
+	Preview     string
+	TotalLines  int
+	TotalRunes  int
+}
+
+func runeVisualWeight(r rune) int {
+	if r >= 0x1100 {
+		return 2
+	}
+	return 1
+}
+
+// collapseMessageText folds overly tall or long messages into a clean preview
+// while preserving UTF-8 rune boundaries and preferring word/punctuation breaks.
+func collapseMessageText(text string) messageFoldInfo {
+	if text == "" {
+		return messageFoldInfo{}
+	}
+	norm := strings.ReplaceAll(text, "\r\n", "\n")
+	norm = strings.ReplaceAll(norm, "\r", "\n")
+
+	totalLines := 1
+	totalRunes := 0
+	totalWeight := 0
+	for _, r := range norm {
+		totalRunes++
+		if r == '\n' {
+			totalLines++
+			continue
+		}
+		totalWeight += runeVisualWeight(r)
+	}
+
+	info := messageFoldInfo{
+		TotalLines: totalLines,
+		TotalRunes: totalRunes,
+	}
+	if totalLines <= longMsgTriggerLines && totalWeight <= longMsgTriggerWeight {
+		return info
+	}
+
+	lines := 1
+	weight := 0
+	cut := len(norm)
+	cutByWeight := false
+	for idx, r := range norm {
+		if r == '\n' {
+			if lines >= longMsgPreviewLines {
+				cut = idx
+				break
+			}
+			lines++
+			continue
+		}
+		w := runeVisualWeight(r)
+		if weight+w > longMsgPreviewWeight {
+			cut = idx
+			cutByWeight = true
+			break
+		}
+		weight += w
+	}
+
+	if cutByWeight && cut > 0 && cut < len(norm) {
+		minCut := (cut * 65) / 100
+		best := -1
+		for i := cut; i > minCut; {
+			r, size := utf8.DecodeLastRuneInString(norm[:i])
+			i -= size
+			if unicode.IsSpace(r) {
+				best = i
+				break
+			}
+			if strings.ContainsRune("，。；！？、.,;!?)", r) {
+				best = i + size
+				break
+			}
+		}
+		if best > minCut {
+			cut = best
+		}
+	}
+
+	prefix := strings.TrimRightFunc(norm[:cut], unicode.IsSpace)
+	if prefix == "" {
+		return info
+	}
+	previewRunes := utf8.RuneCountInString(prefix)
+	previewLines := strings.Count(prefix, "\n") + 1
+	hiddenRunes := totalRunes - previewRunes
+	hiddenLines := totalLines - previewLines
+	if hiddenRunes < longMsgMinHiddenRune && hiddenLines < longMsgMinHiddenLine {
+		return info
+	}
+
+	info.Collapsible = true
+	info.Preview = prefix + "…"
+	return info
+}
+
+func messageFoldSummary(info messageFoldInfo) string {
+	if info.TotalLines > 1 {
+		return fmt.Sprintf("%d lines · %d chars", info.TotalLines, info.TotalRunes)
+	}
+	return fmt.Sprintf("%d chars", info.TotalRunes)
+}
+
+func (m *Model) messageEffectivelyExpanded(msg dc.Message) bool {
+	if m.IsMessageExpanded(msg.ID) {
+		return true
+	}
+	if m.SearchOpen {
+		q := strings.ToLower(strings.TrimSpace(m.SearchQuery))
+		if q != "" && strings.Contains(strings.ToLower(msg.Text), q) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) renderFoldFooter(c ui.C, msgID int, info messageFoldInfo, expanded bool, inBubble bool) {
+	pal := m.Palette
+	if inBubble {
+		ui.Row(c).FillWidth().Height(1).Background(pal.Border.WithAlpha(0.45))
+	}
+	toggleText := "Show more"
+	toggleIcon := IconChevronDown
+	hitLabel := fmt.Sprintf("Expand message %d", msgID)
+	if expanded {
+		toggleText = "Show less"
+		toggleIcon = IconChevronUp
+		hitLabel = fmt.Sprintf("Collapse message %d", msgID)
+	}
+	ui.Row(c).FillWidth().Items(ui.Center).Gap(8).Children(func() {
+		ui.Text(c, messageFoldSummary(info)).FontSize(11).Color(pal.SecondaryText).Ellipsis().Grow(1)
+		toggleBtn := ui.Row(c.Key("fold")).Height(24).PadX(8).Radius(6).Items(ui.Center).Gap(4).
+			Background(pal.Chat.WithAlpha(0.4)).
+			Hover(ui.Look{}.Background(pal.Hover)).
+			Hit(ui.ID(c), hitLabel)
+		toggleBtn.Children(func() {
+			ui.Text(c, toggleText).FontSize(11.5).Weight(gfx.WeightMedium).Color(pal.SelectedText)
+			ui.Icon(c, toggleIcon).Size(12, 12).Color(pal.SelectedText)
+		})
+		if toggleBtn.Clicked() {
+			id := msgID
+			c.After(func() { m.ToggleMessageExpanded(id) })
+		}
+	})
+}
 
 var quickEmojis = []string{"👍", "❤️", "🔥", "🎉", "😄", "✅", "👀", "🚀", "🙏", "💡"}
 
@@ -280,19 +442,36 @@ func (m *Model) renderMessage(c ui.C, chat *dc.ChatEntry, msg dc.Message, groupe
 	}
 
 	if m.Layout == LayoutCompact {
+		fold := collapseMessageText(msg.Text)
+		expanded := m.messageEffectivelyExpanded(msg)
+		displayText := msg.Text
+		if fold.Collapsible && !expanded {
+			displayText = fold.Preview
+		}
 		ui.Row(c.KeyInt(msg.ID)).FillWidth().Gap(8).Items(ui.Start).Children(func() {
 			ui.Text(c, msg.TimeLabel()).FontSize(11.5).Color(pal.SecondaryText).Mono()
 			ui.Text(c, "<"+msg.DisplaySender()+">").FontSize(13).Weight(gfx.WeightSemibold).Color(theme.Primary)
-			ui.Wrap(c, msg.Text).FontSize(13.5).Grow(1)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				ui.Wrap(c, displayText).FontSize(13.5)
+				if fold.Collapsible {
+					m.renderFoldFooter(c, msg.ID, fold, expanded, false)
+				}
+			})
 		})
 		return
 	}
 
 	if m.Layout == LayoutWorkspace {
+		fold := collapseMessageText(msg.Text)
+		expanded := m.messageEffectivelyExpanded(msg)
+		displayText := msg.Text
+		if fold.Collapsible && !expanded {
+			displayText = fold.Preview
+		}
 		ui.Row(c.KeyInt(msg.ID)).FillWidth().Pad(8).Gap(10).Radius(8).
 			Hover(ui.Look{}.Background(pal.Hover)).Children(func() {
 			m.renderAvatar(c, msg.DisplaySender(), "", 28, false, pal.Chat)
-			ui.Column(c).Grow(1).Gap(4).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 				ui.Row(c).Gap(8).Items(ui.Center).Children(func() {
 					ui.Text(c, msg.DisplaySender()).FontSize(13.5).Weight(gfx.WeightSemibold)
 					ui.Text(c, msg.TimeLabel()).FontSize(11.5).Color(pal.SecondaryText)
@@ -303,7 +482,10 @@ func (m *Model) renderMessage(c ui.C, chat *dc.ChatEntry, msg dc.Message, groupe
 						ui.Text(c, status).FontSize(11).Color(pal.SecondaryText)
 					}
 				})
-				ui.Wrap(c, msg.Text).FontSize(13.5)
+				ui.Wrap(c, displayText).FontSize(13.5)
+				if fold.Collapsible {
+					m.renderFoldFooter(c, msg.ID, fold, expanded, false)
+				}
 				m.reactionPills(c, msg)
 			})
 		})
@@ -367,9 +549,18 @@ func (m *Model) renderMessage(c ui.C, chat *dc.ChatEntry, msg dc.Message, groupe
 			bg = pal.Own
 			borderCol = pal.OwnBorder
 		}
+		fold := collapseMessageText(text)
+		expanded := m.messageEffectivelyExpanded(msg)
+		displayText := text
+		if fold.Collapsible && !expanded {
+			displayText = fold.Preview
+		}
 		box := ui.Column(cc).MaxWidth(maxW).PadSides(9, 13, 9, 13).Radius(RadiusControl).
 			Background(bg).Border(1, borderCol).Gap(6).
 			Hit(ui.ID(cc), fmt.Sprintf("Message %d", msg.ID))
+		if fold.Collapsible {
+			box.MinWidth(230)
+		}
 		box.Children(func() {
 			if quote != nil {
 				ui.Row(cc).Gap(8).Pad(7).Radius(8).Background(pal.Chat.WithAlpha(0.55)).Items(ui.Center).Children(func() {
@@ -380,8 +571,11 @@ func (m *Model) renderMessage(c ui.C, chat *dc.ChatEntry, msg dc.Message, groupe
 					})
 				})
 			}
-			if text != "" {
-				ui.Wrap(cc, text).FontSize(13.5).Color(theme.Foreground).LineHeight(20)
+			if displayText != "" {
+				ui.Wrap(cc, displayText).FontSize(13.5).Color(theme.Foreground).LineHeight(20)
+			}
+			if fold.Collapsible {
+				m.renderFoldFooter(cc, msg.ID, fold, expanded, true)
 			}
 		})
 		return box
@@ -539,6 +733,16 @@ func (m *Model) attachMessageContextMenu(c ui.C, box ui.Box, msg dc.Message) {
 		if msg.Text != "" && menu.Item("Copy Text").Clicked() {
 			_ = app.SetClipboardText(msg.Text)
 			m.Toaster.Show("Copied", "Message text copied to clipboard", ui.ToastInfo)
+		}
+		if collapseMessageText(msg.Text).Collapsible {
+			foldLabel := "Expand message"
+			if m.IsMessageExpanded(msg.ID) {
+				foldLabel = "Collapse message"
+			}
+			if menu.Item(foldLabel).Clicked() {
+				id := msg.ID
+				c.After(func() { m.ToggleMessageExpanded(id) })
+			}
 		}
 		if msg.FilePath != "" && menu.Item("Copy File").Clicked() {
 			_ = app.SetClipboardFiles([]string{msg.FilePath})

@@ -239,7 +239,7 @@ func (m *Model) settingsAboutContent(c ui.C) {
 	pal := m.Palette
 	ui.Column(c).FillWidth().Pad(18).Radius(RadiusControl).Gap(10).
 		Background(pal.Sidebar).Border(1, pal.Border).Children(func() {
-		ui.Text(c, "Parla Viva v0.9.1").FontSize(17).Weight(gfx.WeightSemibold)
+		ui.Text(c, "Parla Viva v0.9.2").FontSize(17).Weight(gfx.WeightSemibold)
 		ui.Wrap(c, "GPU-native encrypted Delta Chat / Chatmail desktop client and Agent CLI written in Go on top of vivaui/viva.").
 			FontSize(13).Color(pal.SecondaryText)
 		ui.Row(c).FillWidth().Height(1).Background(pal.Border)

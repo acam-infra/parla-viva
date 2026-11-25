@@ -402,3 +402,66 @@ func TestTelegramStyleMuteToggleAndSidebarAlignment(t *testing.T) {
 		t.Fatal("expected header Unmute button to unmute active chat")
 	}
 }
+
+func TestLongMessageAutoCollapseAndToggle(t *testing.T) {
+	// 1. Short messages stay uncollapsed
+	if info := collapseMessageText("Short chat message"); info.Collapsible {
+		t.Fatalf("short message should not collapse: %+v", info)
+	}
+
+	// 2. Multi-line long message (>8 lines) collapses to 6 lines with ellipsis
+	lines := make([]string, 12)
+	for i := range lines {
+		lines[i] = "Line entry for automated multi-line collapse verification."
+	}
+	multi := strings.Join(lines, "\n")
+	multiInfo := collapseMessageText(multi)
+	if !multiInfo.Collapsible || multiInfo.TotalLines != 12 {
+		t.Fatalf("expected 12-line message to collapse, got %+v", multiInfo)
+	}
+	if !strings.HasSuffix(multiInfo.Preview, "…") {
+		t.Fatalf("expected collapsed preview to end with ellipsis, got %q", multiInfo.Preview)
+	}
+
+	// 3. Long single-paragraph CJK text collapses safely along UTF-8 boundaries
+	cjk := strings.Repeat("这是一条用来测试中文长消息自动折叠功能的完整句子，包含标点与段落内容。", 12)
+	cjkInfo := collapseMessageText(cjk)
+	if !cjkInfo.Collapsible {
+		t.Fatalf("expected long CJK message to collapse, got %+v", cjkInfo)
+	}
+	if !strings.HasSuffix(cjkInfo.Preview, "…") {
+		t.Fatalf("expected CJK preview to end with ellipsis, got %q", cjkInfo.Preview)
+	}
+
+	// 4. Interactive driver click toggles Show more -> Show less on demo long message 4002
+	m := NewDemoModel()
+	m.ActiveChatID = 13
+	driver, inv := openDriver(t, m)
+
+	if m.IsMessageExpanded(4002) {
+		t.Fatal("expected long message 4002 to start collapsed")
+	}
+	clickControl(t, driver, "Expand message 4002")
+	inv.Invalidate()
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.IsMessageExpanded(4002) {
+		t.Fatal("expected clicking Show more to expand message 4002")
+	}
+	clickControl(t, driver, "Collapse message 4002")
+	inv.Invalidate()
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	if m.IsMessageExpanded(4002) {
+		t.Fatal("expected clicking Show less to collapse message 4002")
+	}
+
+	// 5. Active in-chat search auto-expands matching collapsed message
+	m.SearchOpen = true
+	m.SearchQuery = "SafeStore"
+	if !m.messageEffectivelyExpanded(m.Messages[13][1]) {
+		t.Fatal("expected matching search query to auto-expand collapsed message")
+	}
+}

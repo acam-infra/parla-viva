@@ -133,6 +133,7 @@ type Model struct {
 	EditingMsgID int
 	Selecting    bool
 	SelectedMsgs map[int]bool
+	ExpandedMsgs map[int]bool
 	NewChatOpen  bool
 	NewChatName  string
 	NewChatAddr  string
@@ -199,6 +200,7 @@ func newBaseModel() *Model {
 		Messages:        make(map[int][]dc.Message),
 		Windows:         make(map[int]history.Window),
 		SelectedMsgs:    make(map[int]bool),
+		ExpandedMsgs:    make(map[int]bool),
 		CollapsedGroups: make(map[string]bool),
 		ImageCache:      make(map[string]gfx.Bitmap),
 		NewAcctRelay:    dc.DefaultChatmailRelay,
@@ -329,6 +331,22 @@ func NewDemoModel() *Model {
 			ID: 4001, ChatID: 13, SenderContactID: 4, SenderName: "Maintainer",
 			Text:      "Vulkan + CPU fallback verified on Debian X11 and Windows 11 D3D11.",
 			Timestamp: now - 7200, ViewType: "Text", State: dc.MsgStateInSeen,
+		},
+		{
+			ID: 4002, ChatID: 13, SenderContactID: 4, SenderName: "Maintainer",
+			Text: strings.Join([]string{
+				"Parla Viva v0.9.2 Release Notes — Desktop UX & Reliability:",
+				"1. Long messages (>8 lines or >480 visual units) now auto-collapse with an inline line/character summary and Show more / Show less toggle.",
+				"2. Right-click Copy Text always copies the complete original message even while collapsed.",
+				"3. In-chat Search automatically expands collapsed messages that match the active query so hits stay readable.",
+				"4. Muted conversations display neutral gray unread pills with inline bell-off indicators and stay excluded from active Unread filters.",
+				"5. Image and file attachments render directly on the chat canvas without double-nested bubble frames.",
+				"6. GoIM-inspired color schemes (Classic, Pine, Clay, Iris) work across both Dark and Light appearances.",
+				"7. Headless Vulkan/Lavapipe verification passes across Linux, Windows amd64, and macOS arm64 builds.",
+				"8. Full Delta Chat / Chatmail JSON-RPC compatibility preserved with zero account migration required.",
+				"9. Verified SecureJoin QR pairing, Webxdc mini-apps, and SafeStore encrypted backups.",
+			}, "\n"),
+			Timestamp: now - 3600, ViewType: "Text", State: dc.MsgStateInFresh,
 		},
 	}
 
